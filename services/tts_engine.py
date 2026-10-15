@@ -592,8 +592,9 @@ async def _synthesize_gemini_speech(
     progress_callback = None,
 ) -> dict:
     """
-    Synthesize complete speech script using Gemini 3.8 Flash TTS with slide-aligned audio
-    and synchronized subtitles (SRT, VTT, and ASS karaoke).
+    Synthesize complete speech script using Gemini TTS using cohesive large chunks (~1200 chars)
+    to minimize API calls (only ~8-12 requests per 15-minute video instead of 117+ requests).
+    Produces slide-aligned audio and synchronized subtitles (SRT, VTT, and ASS karaoke).
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -603,10 +604,15 @@ async def _synthesize_gemini_speech(
     subs_vtt_path = output_dir / "subtitles.vtt"
     subs_ass_path = output_dir / "subtitles.ass"
 
-    seg_list = segments if segments else [full_text or ""]
-    clean_segs = [s.strip() for s in seg_list if s.strip()]
-    if not clean_segs:
-        clean_segs = ["Heute gibt es wichtige Neuigkeiten."]
+    if not full_text:
+        full_text = "\n\n".join(s.strip() for s in segments if s.strip())
+    if not full_text:
+        full_text = "Heute gibt es wichtige Neuigkeiten."
+
+    # Chunk the text into ~1200-character blocks at natural sentence/paragraph boundaries
+    # This reduces 100+ individual slide requests down to ~8-12 requests total!
+    chunks = _split_text_into_chunks(full_text, max_chars=1200)
+    logger.info(f"Synthesizing script ({len(full_text)} chars, {len(segments)} slides) in {len(chunks)} Gemini TTS chunks ({voice_name})")
 
     # Quick probe to test Gemini TTS quota availability before starting full batch
     logger.info("Probing Gemini TTS availability and quota...")
@@ -616,57 +622,27 @@ async def _synthesize_gemini_speech(
         logger.error(f"Gemini TTS quota probe failed: {e}")
         raise RuntimeError(f"Квота Gemini TTS исчерпана на всех доступных ключах (429). {e}")
 
-    logger.info(f"Synthesizing {len(clean_segs)} segments using Gemini TTS ({voice_name})")
     if progress_callback:
-        progress_callback(0, f"Gemini TTS: 0/{len(clean_segs)} слайдов")
-
-    sem = asyncio.Semaphore(2)
-    results = [None] * len(clean_segs)
-    done_count = 0
-
-    async def _worker(idx: int, seg_text: str):
-        nonlocal done_count
-        async with sem:
-            await asyncio.sleep(0.25 * (idx % 2))
-            mp3_bytes, dur_ms = await _synthesize_gemini_single_chunk(seg_text, voice_name)
-        results[idx] = (mp3_bytes, dur_ms, seg_text)
-        done_count += 1
-        logger.info(f"Gemini slide {idx + 1}/{len(clean_segs)} done ({dur_ms / 1000:.1f}s). Progress {done_count}/{len(clean_segs)}")
-        if progress_callback:
-            pct = int(done_count / len(clean_segs) * 100)
-            progress_callback(pct, f"Gemini TTS: {done_count}/{len(clean_segs)} слайдов")
-
-    tasks = [asyncio.create_task(_worker(i, s)) for i, s in enumerate(clean_segs)]
-    try:
-        await asyncio.gather(*tasks)
-    except Exception:
-        for t in tasks:
-            t.cancel()
-        raise
+        progress_callback(0, f"Gemini TTS: 0/{len(chunks)} аудио-блоков")
 
     total_audio = bytearray()
     all_boundaries = []
-    segment_timings = []
     cum_ms = 0.0
 
-    for idx, (mp3_bytes, dur_ms, seg_text) in enumerate(results):
-        seg_start_ms = cum_ms
-        seg_dur_ms = dur_ms
-        seg_end_ms = seg_start_ms + seg_dur_ms
+    for idx, chunk_text in enumerate(chunks):
+        if idx > 0:
+            await asyncio.sleep(0.4)  # Gentle pause to stay well within Google RPM limits
 
-        segment_timings.append({
-            "start_ms": seg_start_ms,
-            "end_ms": seg_end_ms,
-            "duration_ms": seg_dur_ms,
-        })
+        mp3_bytes, dur_ms = await _synthesize_gemini_single_chunk(chunk_text, voice_name)
 
-        sentences = [s.strip() for s in re.split(r'(?<=[.!?…])\s+', seg_text) if s.strip()]
+        # Split chunk into sentences for subtitle generation and timing alignment
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?…])\s+', chunk_text) if s.strip()]
         if not sentences:
-            sentences = [seg_text]
+            sentences = [chunk_text]
         tot_chars = max(1, sum(len(s) for s in sentences))
-        s_cur_ms = seg_start_ms
+        s_cur_ms = cum_ms
         for s in sentences:
-            s_dur = seg_dur_ms * (len(s) / tot_chars)
+            s_dur = dur_ms * (len(s) / tot_chars)
             all_boundaries.append({
                 "offset": int(s_cur_ms * 10000),
                 "duration": int(s_dur * 10000),
@@ -677,11 +653,17 @@ async def _synthesize_gemini_speech(
             s_cur_ms += s_dur
 
         total_audio.extend(mp3_bytes)
-        cum_ms = seg_end_ms
+        cum_ms += dur_ms
+
+        logger.info(f"Gemini chunk {idx + 1}/{len(chunks)} done ({dur_ms / 1000:.1f}s). Total audio so far: {cum_ms / 1000:.1f}s")
+        if progress_callback:
+            pct = int((idx + 1) / len(chunks) * 100)
+            progress_callback(pct, f"Gemini TTS: {idx + 1}/{len(chunks)} аудио-блоков ({cum_ms / 1000:.0f}с)")
 
     with open(combined_path, "wb") as f_out:
         f_out.write(total_audio)
 
+    # Subtitles (SRT, VTT, ASS karaoke)
     srt_content, vtt_content, ass_content = _boundaries_to_subtitles(all_boundaries)
     with open(subs_srt_path, "w", encoding="utf-8") as f:
         f.write(srt_content)
@@ -690,8 +672,15 @@ async def _synthesize_gemini_speech(
     with open(subs_ass_path, "w", encoding="utf-8") as f:
         f.write(ass_content)
 
+    # Calculate exact slide timings for all visual slides
+    segment_timings = _calculate_segment_timings_from_boundaries(
+        segments=segments,
+        all_boundaries=all_boundaries,
+        total_duration_ms=cum_ms,
+    )
+
     engine_name = f"Gemini TTS ({voice_name})"
-    logger.info(f"Gemini TTS complete: {combined_path}, {len(clean_segs)} segments, duration: {cum_ms / 1000:.1f}s")
+    logger.info(f"Gemini TTS complete: {combined_path}, {len(chunks)} chunks, {len(segment_timings)} slide timings, total: {cum_ms / 1000:.1f}s")
 
     return {
         "combined_audio": str(combined_path),
