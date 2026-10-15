@@ -134,20 +134,25 @@ async def _synthesize_once(chunk_text: str, voice: str, tts_rate: str) -> tuple[
     return await asyncio.wait_for(_stream_reader(), timeout=30.0)
 
 
+def _is_fatal_tts_error(e: Exception) -> bool:
+    msg = str(e).lower()
+    return any(term in msg for term in ["403", "forbidden", "unauthorized", "invalid response status", "handshake"])
+
+
 async def _synthesize_chunk_with_retry(
     chunk_text: str,
     voice: str,
     rate: str = "+0%",
-    max_retries: int = 5,
+    max_retries: int = 3,
 ) -> tuple[bytes, list[dict]]:
     """
     Synthesize a chunk strictly with the SELECTED voice (guarantees voice consistency across the whole video).
-    1) Up to `max_retries` whole-chunk attempts with progressive backoff.
+    1) Up to max_retries whole-chunk attempts with progressive backoff.
     2) If still failing, split into individual sentences and synthesize with the SAME voice.
-    3) Sentence level has up to 6 retries with exponential backoff and jitter to overcome transient Microsoft throttling.
+    3) Sentence level has up to 2 retries with fast backoff; aborts immediately on fatal errors.
     """
     tts_rate = rate if rate and rate not in ["+0%", "0%", "-0%"] else "+0%"
-    chunk_backoff = [1.0, 2.5, 4.5, 7.0, 10.0]
+    chunk_backoff = [1.0, 2.0, 3.5]
 
     last_err = None
     for attempt in range(max_retries):
@@ -155,7 +160,10 @@ async def _synthesize_chunk_with_retry(
             return await _synthesize_once(chunk_text, voice, tts_rate)
         except Exception as e:
             last_err = e
-            delay = chunk_backoff[min(attempt, len(chunk_backoff) - 1)] + random.uniform(0.3, 1.0)
+            if _is_fatal_tts_error(e):
+                logger.error(f"Edge-TTS fatal error ({e}). Aborting retries immediately.")
+                raise e
+            delay = chunk_backoff[min(attempt, len(chunk_backoff) - 1)] + random.uniform(0.2, 0.5)
             logger.warning(
                 f"Edge-TTS chunk attempt {attempt + 1}/{max_retries} ({len(chunk_text)} chars, {voice}) failed: {e}. "
                 f"Retry in {delay:.1f}s"
@@ -171,19 +179,19 @@ async def _synthesize_chunk_with_retry(
     logger.info(f"Edge-TTS: chunk ({len(chunk_text)} chars) failed after {max_retries} tries, processing {len(sentences)} sentences individually with {voice}")
     out_audio = bytearray()
     out_bounds = []
-    sent_backoff = [1.0, 2.0, 4.0, 6.0, 9.0, 12.0]
+    sent_backoff = [1.0, 2.0]
 
+    consecutive_sent_failures = 0
     for sent_idx, sent in enumerate(sentences):
         s_clean = _clean_tts_text(sent)
         if not any(ch.isalnum() for ch in s_clean):
             continue
 
-        # Micro-pause between sentences to avoid Microsoft rate limits
-        await asyncio.sleep(0.4)
+        await asyncio.sleep(0.3)
 
         sent_success = False
         last_sent_err = None
-        for attempt in range(6):
+        for attempt in range(2):
             try:
                 s_audio, s_bounds = await _synthesize_once(s_clean, voice, tts_rate)
                 offset_ticks = int(len(out_audio) / EDGE_MP3_BYTES_PER_SEC * 10_000_000)
@@ -193,20 +201,26 @@ async def _synthesize_chunk_with_retry(
                     out_bounds.append(nb)
                 out_audio.extend(s_audio)
                 sent_success = True
+                consecutive_sent_failures = 0
                 break
             except Exception as e:
                 last_sent_err = e
-                delay = sent_backoff[min(attempt, len(sent_backoff) - 1)] + random.uniform(0.2, 0.8)
-                logger.warning(
-                    f"Edge-TTS sentence {sent_idx + 1}/{len(sentences)} with voice {voice} attempt {attempt + 1}/6 failed ({len(s_clean)} chars): {e}. "
-                    f"Retry in {delay:.1f}s"
-                )
-                await asyncio.sleep(delay)
+                if _is_fatal_tts_error(e):
+                    raise e
+                delay = sent_backoff[min(attempt, len(sent_backoff) - 1)] + random.uniform(0.1, 0.3)
+                if attempt < 1:
+                    await asyncio.sleep(delay)
 
         if not sent_success:
+            consecutive_sent_failures += 1
             logger.error(
-                f"Edge-TTS sentence {sent_idx + 1}/{len(sentences)} failed all retries with {voice}: {last_sent_err}."
+                f"Edge-TTS sentence {sent_idx + 1}/{len(sentences)} failed retries with {voice}: {last_sent_err}."
             )
+            if consecutive_sent_failures >= 2:
+                raise RuntimeError(f"Edge-TTS service failing: multiple sentences failed ({last_sent_err})")
+
+    if not out_audio or len(out_audio) == 0:
+        raise RuntimeError(f"Edge-TTS chunk synthesis failed: audio is empty for voice {voice}")
 
     return bytes(out_audio), out_bounds
 
@@ -704,111 +718,128 @@ async def generate_segmented_speech(
     
     if not full_text:
         full_text = "\n\n".join(segments)
-        
-    combined_path = output_dir / "narration.mp3"
-    subs_srt_path = output_dir / "subtitles.srt"
-    subs_vtt_path = output_dir / "subtitles.vtt"
-    
-    chunks = _split_text_into_chunks(full_text, max_chars=350)
-    logger.info(f"Synthesizing script ({len(full_text)} chars) in {len(chunks)} chunks using {voice}, concurrency={TTS_CONCURRENCY}")
-    
-    results: list = [None] * len(chunks)
-    sem = asyncio.Semaphore(TTS_CONCURRENCY)
-    done_count = 0
-    done_bytes = 0
-    
-    if progress_callback:
-        progress_callback(0, f"Озвучка: 0/{len(chunks)} фрагментов")
-    
-    async def _worker(idx: int, text: str):
-        nonlocal done_count, done_bytes
-        async with sem:
-            # Gentle pacing between requests prevents Microsoft rate limits
-            if idx > 0:
-                await asyncio.sleep(0.5)
-            audio_data, boundaries = await _synthesize_chunk_with_retry(
-                chunk_text=text, voice=voice, rate=rate, max_retries=5,
-            )
-        results[idx] = (audio_data, boundaries)
-        done_count += 1
-        done_bytes += len(audio_data)
-        logger.info(f"Chunk {idx + 1}/{len(chunks)} done ({len(audio_data)} bytes). Progress {done_count}/{len(chunks)}")
-        if progress_callback:
-            pct = int(done_count / len(chunks) * 100)
-            progress_callback(pct, f"Озвучка: {done_count}/{len(chunks)} фрагментов ({done_bytes / (1024 * 1024):.1f} МБ)")
-    
-    tasks = [asyncio.create_task(_worker(i, c)) for i, c in enumerate(chunks)]
+
     try:
-        await asyncio.gather(*tasks)
-    except Exception:
-        for t in tasks:
-            t.cancel()
-        raise
-    
-    # Assemble in original order with exact offsets
-    total_audio = bytearray()
-    all_boundaries = []
-    cumulative_offset_ms = 0.0
-    
-    for audio_data, boundaries in results:
-        for b in boundaries:
-            b_start_ms = cumulative_offset_ms + (b["offset"] / 10000.0)
-            b_dur_ms = b["duration"] / 10000.0
-            all_boundaries.append({
-                "offset": int(b_start_ms * 10000),
-                "duration": b["duration"],
-                "start_ms": b_start_ms,
-                "dur_ms": b_dur_ms,
-                "text": b.get("text", ""),
-            })
-        total_audio.extend(audio_data)
-        # Exact chunk duration from MP3 size (includes trailing silence -> no drift)
-        cumulative_offset_ms += (len(audio_data) / EDGE_MP3_BYTES_PER_SEC) * 1000.0
-    
-    logger.info(f"All {len(chunks)} chunks assembled: {len(total_audio)} bytes, {cumulative_offset_ms / 1000:.1f}s")
-    
-    if not total_audio or len(total_audio) == 0:
-        raise RuntimeError(f"TTS generation failed: synthesized audio is empty (0 bytes) for voice {voice}.")
-        
-    # Write combined narration audio
-    with open(combined_path, "wb") as f_out:
-        f_out.write(total_audio)
-        
-    if progress_callback:
-        progress_callback(100, f"Озвучка завершена: {len(total_audio) / (1024 * 1024):.1f} МБ")
-        
-    # Generate perfectly synchronized subtitles from boundaries (SRT, VTT, and ASS Karaoke)
-    srt_content, vtt_content, ass_content = _boundaries_to_subtitles(all_boundaries)
-    subs_ass_path = output_dir / "subtitles.ass"
-    
-    with open(subs_srt_path, "w", encoding="utf-8") as f:
-        f.write(srt_content)
-        
-    with open(subs_vtt_path, "w", encoding="utf-8") as f:
-        f.write(vtt_content)
-        
-    with open(subs_ass_path, "w", encoding="utf-8") as f:
-        f.write(ass_content)
-        
-    # Calculate segment timings for visual slide transitions
-    segment_timings = _calculate_segment_timings_from_boundaries(
-        segments=segments,
-        all_boundaries=all_boundaries,
-        total_duration_ms=cumulative_offset_ms,
-    )
-    
-    engine_name = f"Edge-TTS Neural ({voice})"
-    logger.info(f"TTS complete ({engine_name}): {combined_path}, {len(all_boundaries)} speech boundaries, {len(segment_timings)} slide timings")
-    
-    return {
-        "combined_audio": str(combined_path),
-        "subtitles_srt": str(subs_srt_path),
-        "subtitles_vtt": str(subs_vtt_path),
-        "subtitles_ass": str(subs_ass_path),
-        "segment_timings": segment_timings,
-        "word_boundaries": all_boundaries,
-        "engine": engine_name,
-    }
+        combined_path = output_dir / "narration.mp3"
+        subs_srt_path = output_dir / "subtitles.srt"
+        subs_vtt_path = output_dir / "subtitles.vtt"
+
+        chunks = _split_text_into_chunks(full_text, max_chars=350)
+        logger.info(f"Synthesizing script ({len(full_text)} chars) in {len(chunks)} chunks using {voice}, concurrency={TTS_CONCURRENCY}")
+
+        results: list = [None] * len(chunks)
+        sem = asyncio.Semaphore(TTS_CONCURRENCY)
+        done_count = 0
+        done_bytes = 0
+
+        if progress_callback:
+            progress_callback(0, f"Озвучка: 0/{len(chunks)} фрагментов")
+
+        async def _worker(idx: int, text: str):
+            nonlocal done_count, done_bytes
+            async with sem:
+                if idx > 0:
+                    await asyncio.sleep(0.3)
+                audio_data, boundaries = await _synthesize_chunk_with_retry(
+                    chunk_text=text, voice=voice, rate=rate, max_retries=3,
+                )
+            results[idx] = (audio_data, boundaries)
+            done_count += 1
+            done_bytes += len(audio_data)
+            logger.info(f"Chunk {idx + 1}/{len(chunks)} done ({len(audio_data)} bytes). Progress {done_count}/{len(chunks)}")
+            if progress_callback:
+                pct = int(done_count / len(chunks) * 100)
+                progress_callback(pct, f"Озвучка: {done_count}/{len(chunks)} фрагментов ({done_bytes / (1024 * 1024):.1f} МБ)")
+
+        tasks = [asyncio.create_task(_worker(i, c)) for i, c in enumerate(chunks)]
+        try:
+            await asyncio.gather(*tasks)
+        except Exception:
+            for t in tasks:
+                t.cancel()
+            raise
+
+        total_audio = bytearray()
+        all_boundaries = []
+        cumulative_offset_ms = 0.0
+
+        for audio_data, boundaries in results:
+            if not audio_data:
+                continue
+            for b in boundaries:
+                b_start_ms = cumulative_offset_ms + (b["offset"] / 10000.0)
+                b_dur_ms = b["duration"] / 10000.0
+                all_boundaries.append({
+                    "offset": int(b_start_ms * 10000),
+                    "duration": b["duration"],
+                    "start_ms": b_start_ms,
+                    "dur_ms": b_dur_ms,
+                    "text": b.get("text", ""),
+                })
+            total_audio.extend(audio_data)
+            cumulative_offset_ms += (len(audio_data) / EDGE_MP3_BYTES_PER_SEC) * 1000.0
+
+        logger.info(f"All {len(chunks)} chunks assembled: {len(total_audio)} bytes, {cumulative_offset_ms / 1000:.1f}s")
+
+        if not total_audio or len(total_audio) == 0:
+            raise RuntimeError(f"Edge-TTS synthesized audio is empty (0 bytes) for voice {voice}.")
+
+        with open(combined_path, "wb") as f_out:
+            f_out.write(total_audio)
+
+        if progress_callback:
+            progress_callback(100, f"Озвучка завершена: {len(total_audio) / (1024 * 1024):.1f} МБ")
+
+        srt_content, vtt_content, ass_content = _boundaries_to_subtitles(all_boundaries)
+        subs_ass_path = output_dir / "subtitles.ass"
+
+        with open(subs_srt_path, "w", encoding="utf-8") as f:
+            f.write(srt_content)
+
+        with open(subs_vtt_path, "w", encoding="utf-8") as f:
+            f.write(vtt_content)
+
+        with open(subs_ass_path, "w", encoding="utf-8") as f:
+            f.write(ass_content)
+
+        segment_timings = _calculate_segment_timings_from_boundaries(
+            segments=segments,
+            all_boundaries=all_boundaries,
+            total_duration_ms=cumulative_offset_ms,
+        )
+
+        engine_name = f"Edge-TTS Neural ({voice})"
+        logger.info(f"TTS complete ({engine_name}): {combined_path}, {len(all_boundaries)} speech boundaries, {len(segment_timings)} slide timings")
+
+        return {
+            "combined_audio": str(combined_path),
+            "subtitles_srt": str(subs_srt_path),
+            "subtitles_vtt": str(subs_vtt_path),
+            "subtitles_ass": str(subs_ass_path),
+            "segment_timings": segment_timings,
+            "word_boundaries": all_boundaries,
+            "engine": engine_name,
+        }
+    except Exception as edge_err:
+        logger.warning(
+            f"Edge-TTS failed ({edge_err}). Falling back seamlessly to Gemini TTS..."
+        )
+        if progress_callback:
+            progress_callback(0, f"Edge-TTS недоступен. Переключение на Gemini TTS...")
+
+        gemini_voice = "Charon"
+        female_indicators = ["katja", "amala", "svetlana", "dariya", "kore", "aoede", "jenny", "aria", "denise", "elvira", "xiaoxiao", "zariyah", "francisca", "elsa", "nanami", "sunhi", "swara", "emel"]
+        if voice and any(fi in voice.lower() for fi in female_indicators):
+            gemini_voice = "Kore"
+
+        return await _synthesize_gemini_speech(
+            segments=segments,
+            voice_name=gemini_voice,
+            output_dir=output_dir,
+            lang=lang,
+            full_text=full_text,
+            progress_callback=progress_callback,
+        )
 
 
 async def list_voices(lang: str = None) -> list[dict]:
