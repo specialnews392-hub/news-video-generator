@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>News Video Generator — Генератор новостных роликов</title>
+    <meta name="description" content="Автоматическое создание новостных видеороликов с AI озвучкой и монтажом">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Animated background -->
+    <div class="bg-grid"></div>
+    <div class="bg-glow bg-glow-1"></div>
+    <div class="bg-glow bg-glow-2"></div>
+    <div class="bg-glow bg-glow-3"></div>
+
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="23 7 16 12 23 17 23 7"/>
+                        <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+                    </svg>
+                </div>
+                <div class="logo-text">
+                    <h1>News Video Generator</h1>
+                    <span class="logo-subtitle">AI-Powered News Videos</span>
+                </div>
+            </div>
+            <div class="header-right">
+                <button type="button" class="btn-header-action btn-telegram-toggle" id="btnTelegramHeader" onclick="openTelegramModal()" title="Настройка уведомлений в Telegram">
+                    <span class="tg-icon">✈️</span>
+                    <span>Telegram</span>
+                    <span class="tg-indicator" id="tgIndicator"></span>
+                </button>
+                <div class="header-status">
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="statusText">Готов к работе</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Floating Active Job Tracker (visible on Results/History while background job is running) -->
+        <div class="active-job-floating-pill" id="activeJobFloatingPill" style="display: none;" onclick="goToActiveJob()">
+            <div class="pill-pulse"></div>
+            <div class="pill-content">
+                <span class="pill-badge">⚡ В ФОНЕ ГЕНЕРИРУЕТСЯ</span>
+                <span class="pill-title" id="pillJobTitle">...</span>
+                <span class="pill-progress" id="pillJobProgress">0%</span>
+            </div>
+            <button type="button" class="pill-action-btn">Следить за процессом →</button>
+        </div>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Generator Panel -->
+            <section class="panel generator-panel" id="generatorPanel">
+                <div class="panel-header">
+                    <h2>🎬 Новый ролик</h2>
+                    <p class="panel-description">Укажите тему и параметры для генерации</p>
+                </div>
+                
+                <div class="form-grid">
+                    <!-- Topic Input Mode Switcher -->
+                    <div class="form-group form-group-full">
+                        <div class="topic-mode-bar">
+                            <label class="form-label-title" for="topicInput">Тематика выпусков</label>
+                            <div class="mode-tabs">
+                                <button type="button" class="mode-tab active" id="modeSingleTab" onclick="setTopicMode('single')">
+                                    🎯 Одиночный ролик
+                                </button>
+                                <button type="button" class="mode-tab" id="modeBatchTab" onclick="setTopicMode('batch')">
+                                    📚 Пакетный запуск (несколько тем)
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Single topic mode -->
+                        <div id="singleTopicWrapper">
+                            <div class="input-wrapper" style="display: flex; gap: 8px; align-items: stretch;">
+                                <div style="flex: 1; position: relative;">
+                                    <input type="text" id="topicInput" placeholder="Например: Migration Deutschland Asylpolitik" autocomplete="off" style="width: 100%; height: 100%;">
+                                    <div class="input-icon">🔍</div>
+                                </div>
+                                <button type="button" class="btn btn-secondary btn-acute-topics" id="btnAcuteTopics" onclick="openAcuteTopicsModal()" style="white-space: nowrap; padding: 0 16px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(245, 158, 11, 0.5); color: #fbbf24; background: rgba(245, 158, 11, 0.12); cursor: pointer; border-radius: 8px; transition: all 0.2s;" title="Показать острые темы и ракурсы дня">
+                                    ⚡ Острые сюжеты дня
+                                </button>
+                            </div>
+                            <div class="quick-topics">
+                                <span class="quick-topic" data-topic="Внутренняя политика России Андрей Белоусов" data-voice="ru-dmitry">🇷🇺 Андрей Белоусов</span>
+                                <span class="quick-topic" data-topic="Внутренняя политика России" data-voice="ru-dmitry">🇷🇺 Внутренняя политика</span>
+                                <span class="quick-topic" data-topic="Migration Deutschland Asylpolitik" data-voice="de-gemini-charon">🇩🇪 Migration DE</span>
+                                <span class="quick-topic" data-topic="Friedrich Merz Asyl Grenzen" data-voice="de-gemini-charon">🇩🇪 Friedrich Merz</span>
+                                <span class="quick-topic" data-topic="Nancy Faeser Grenzkontrollen" data-voice="de-gemini-charon">🇩🇪 Nancy Faeser</span>
+                                <span class="quick-topic" data-topic="Rente Bürgergeld Reform Deutschland" data-voice="de-gemini-charon" data-theme="finance_de" style="border-color: rgba(16, 185, 129, 0.5); color: #34d399;">💶 Rente & Bürgergeld</span>
+                                <span class="quick-topic" data-topic="Wirtschaft Deutschland Krise Inflation" data-voice="de-gemini-charon" data-theme="finance_de" style="border-color: rgba(16, 185, 129, 0.5); color: #34d399;">📈 Wirtschaft DE</span>
+                                <span class="quick-topic" data-topic="Sozialreformen Steuern Deutschland" data-voice="de-gemini-charon" data-theme="finance_de" style="border-color: rgba(16, 185, 129, 0.5); color: #34d399;">🏛️ Sozialpolitik DE</span>
+                                <span class="quick-topic" data-topic="Trump news" data-voice="en-guy">🇺🇸 Трамп</span>
+                                <span class="quick-topic" data-topic="Внешняя политика">🌍 Внешняя политика</span>
+                                <span class="quick-topic" data-topic="Технологии ИИ">🤖 Технологии</span>
+                                <span class="quick-topic" data-topic="Экономика мира">📊 Экономика</span>
+                                <span class="quick-topic" data-topic="Военные конфликты">⚔️ Конфликты</span>
+                            </div>
+                        </div>
+
+                        <!-- Batch topics mode -->
+                        <div id="batchTopicWrapper" style="display: none;">
+                            <div class="batch-textarea-wrapper">
+                                <textarea id="batchTopicsInput" rows="5" placeholder="Введите список тем — по одной на каждой строке:&#10;Внутренняя политика России Андрей Белоусов&#10;Ситуация на Ближнем Востоке и цены на нефть&#10;Новые законы РФ с 1 ноября для автомобилистов&#10;Прорыв в квантовых вычислениях"></textarea>
+                            </div>
+                            <div class="batch-footer-info">
+                                <span class="batch-counter" id="batchCounter">📝 Тем в очереди: 0</span>
+                                <span class="batch-notice">⚡ Сервер автоматически выполнит все темы по порядку без зависаний</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Voice -->
+                    <div class="form-group">
+                        <label for="voiceSelect">Голос озвучки</label>
+                        <div style="display:flex;gap:8px;align-items:center">
+                            <select id="voiceSelect" style="flex:1">
+                                <optgroup label="🇩🇪 Deutsch (AI & Neural)">
+                                    <option value="de-gemini-charon">✨ Gemini Charon — авторитетный мужской (AI)</option>
+                                    <option value="de-gemini-fenrir">✨ Gemini Fenrir — решительный мужской (AI)</option>
+                                    <option value="de-gemini-puck">✨ Gemini Puck — динамичный мужской (AI)</option>
+                                    <option value="de-gemini-kore">✨ Gemini Kore — ясный женский (AI)</option>
+                                    <option value="de-gemini-aoede">✨ Gemini Aoede — экспрессивный женский (AI)</option>
+                                    <option value="de-conrad">Conrad — männlich (Edge)</option>
+                                    <option value="de-killian">Killian — männlich (Edge)</option>
+                                    <option value="de-katja">Katja — weiblich (Edge)</option>
+                                </optgroup>
+                                <optgroup label="🇷🇺 Русский (AI & Neural)">
+                                    <option value="ru-gemini-charon">✨ Gemini Charon — глубокий / авторитетный (AI)</option>
+                                    <option value="ru-gemini-fenrir">✨ Gemini Fenrir — мощный / решительный (AI)</option>
+                                    <option value="ru-gemini-puck">✨ Gemini Puck — молодой / динамичный (AI)</option>
+                                    <option value="ru-gemini-kore">✨ Gemini Kore — спокойный женский (AI)</option>
+                                    <option value="ru-dmitry" selected>Дмитрий — мужской (Edge)</option>
+                                    <option value="ru-svetlana">Светлана — женский (Edge)</option>
+                                    <option value="ru-dariya">Дария — женский (Edge)</option>
+                                </optgroup>
+                                <optgroup label="🇺🇸 English (AI & Neural)">
+                                    <option value="en-gemini-charon">✨ Gemini Charon — authoritative male (AI)</option>
+                                    <option value="en-gemini-fenrir">✨ Gemini Fenrir — resolute male (AI)</option>
+                                    <option value="en-gemini-puck">✨ Gemini Puck — energetic male (AI)</option>
+                                    <option value="en-gemini-kore">✨ Gemini Kore — calm female (AI)</option>
+                                    <option value="en-guy">Guy — male (Edge)</option>
+                                    <option value="en-andrew">Andrew — male (Edge)</option>
+                                    <option value="en-brian">Brian — male (Edge)</option>
+                                    <option value="en-davis">Davis — male (Edge)</option>
+                                    <option value="en-jenny">Jenny — female (Edge)</option>
+                                    <option value="en-aria">Aria — female (Edge)</option>
+                                </optgroup>
+                                <optgroup label="🇫🇷 Français">
+                                    <option value="fr-henri">Henri — masculin</option>
+                                    <option value="fr-denise">Denise — féminin</option>
+                                </optgroup>
+                                <optgroup label="🇪🇸 Español">
+                                    <option value="es-alvaro">Alvaro — masculino</option>
+                                    <option value="es-elvira">Elvira — femenino</option>
+                                </optgroup>
+                                <optgroup label="🇺🇦 Українська">
+                                    <option value="uk-ostap">Остап — чоловічий</option>
+                                    <option value="uk-polina">Полина — жіночий</option>
+                                </optgroup>
+                                <optgroup label="🇨🇳 中文">
+                                    <option value="zh-yunxi">Yunxi — 男</option>
+                                    <option value="zh-xiaoxiao">Xiaoxiao — 女</option>
+                                </optgroup>
+                                <optgroup label="🇸🇦 العربية">
+                                    <option value="ar-hamed">Hamed — ذكر</option>
+                                    <option value="ar-zariyah">Zariyah — أنثى</option>
+                                </optgroup>
+                                <optgroup label="🇧🇷 Português">
+                                    <option value="pt-antonio">Antonio — masculino</option>
+                                    <option value="pt-francisca">Francisca — feminino</option>
+                                </optgroup>
+                                <optgroup label="🇮🇹 Italiano">
+                                    <option value="it-diego">Diego — maschile</option>
+                                    <option value="it-elsa">Elsa — femminile</option>
+                                </optgroup>
+                                <optgroup label="🇯🇵 日本語">
+                                    <option value="ja-keita">Keita — 男性</option>
+                                    <option value="ja-nanami">Nanami — 女性</option>
+                                </optgroup>
+                                <optgroup label="🇰🇷 한국어">
+                                    <option value="ko-injoon">InJoon — 남성</option>
+                                    <option value="ko-sunhi">SunHi — 여성</option>
+                                </optgroup>
+                                <optgroup label="🇮🇳 हिन्दी">
+                                    <option value="hi-madhur">Madhur — पुरुष</option>
+                                    <option value="hi-swara">Swara — महिला</option>
+                                </optgroup>
+                                <optgroup label="🇹🇷 Türkçe">
+                                    <option value="tr-ahmet">Ahmet — erkek</option>
+                                    <option value="tr-emel">Emel — kadın</option>
+                                </optgroup>
+                            </select>
+                            <button type="button" class="btn-preview" id="btnPreview" onclick="previewVoice()" title="Прослушать голос">
+                                🔊
+                            </button>
+                            <button type="button" class="btn-secondary" id="btnCheckTtsQuota" onclick="checkGeminiTtsQuota()" title="Проверить доступность квоты Gemini TTS" style="padding: 6px 12px; font-size: 12px; border-radius: 6px; white-space: nowrap; cursor: pointer; border: 1px solid var(--border, #3a3f58); background: var(--card-bg, #1e2238); color: var(--text, #fff); transition: all 0.2s;">
+                                ⚡ Квота Gemini
+                            </button>
+                        </div>
+                        <div id="ttsQuotaStatus" style="display:none; font-size: 12px; margin-top: 6px; padding: 6px 10px; border-radius: 6px; line-height: 1.4;"></div>
+                        <audio id="voicePreview" style="display:none"></audio>
+                    </div>
+
+                    <!-- Theme -->
+                    <div class="form-group">
+                        <label for="themeSelect">Стиль обложки</label>
+                        <select id="themeSelect">
+                            <option value="default">🎨 По умолчанию</option>
+                            <option value="finance_de">💶 Финансы / Rente / Bürgergeld (Германия)</option>
+                            <option value="politics">🏛️ Политика</option>
+                            <option value="economy">📈 Экономика</option>
+                            <option value="technology">💻 Технологии</option>
+                            <option value="military">⚔️ Военные</option>
+                            <option value="world">🌍 Мировые</option>
+                            <option value="society">👥 Общество</option>
+                            <option value="science">🔬 Наука</option>
+                        </select>
+                    </div>
+
+                    <!-- Voice Rate -->
+                    <div class="form-group">
+                        <label for="rateSlider">Скорость речи: <span id="rateValue">0%</span></label>
+                        <input type="range" id="rateSlider" min="-30" max="30" value="0" step="5">
+                    </div>
+
+                    <!-- Script Length -->
+                    <div class="form-group">
+                        <label for="lengthSlider">Длина текста: <span id="lengthValue">15 000</span> знаков (<span id="approxTime">~12-15 мин</span>)</label>
+                        <input type="range" id="lengthSlider" min="8000" max="30000" value="15000" step="1000">
+                    </div>
+
+                    <!-- Options -->
+                    <div class="form-group form-group-full">
+                        <label class="checkbox-label" style="color: #34d399; font-weight: 500; margin-bottom: 8px;">
+                            <input type="checkbox" id="kenBurnsMode">
+                            <span class="checkmark"></span>
+                            🎬 Кинематографичный Ken Burns (дрейф и наезд камеры)
+                        </label>
+                        <label class="checkbox-label" style="color: #a78bfa; font-weight: 500; margin-bottom: 8px;">
+                            <input type="checkbox" id="transitionsMode" checked>
+                            <span class="checkmark"></span>
+                            ✨ Плавные переходы между слайдами (растворение / наплыв)
+                        </label>
+                        <label class="checkbox-label" style="margin-bottom: 8px;">
+                            <input type="checkbox" id="skipAnalysis" checked>
+                            <span class="checkmark"></span>
+                            Пропустить AI-анализ изображений (быстрее)
+                        </label>
+                        <label class="checkbox-label" style="color: #fbbf24; font-weight: 600; margin-bottom: 8px;">
+                            <input type="checkbox" id="reviewSlidesMode">
+                            <span class="checkmark"></span>
+                            🔍 Ручная модерация слайдов (пауза перед сборкой видео для проверки и замены кадров)
+                        </label>
+                        <label class="checkbox-label" style="color: #38bdf8; font-weight: 600;">
+                            <input type="checkbox" id="isPreviewMode">
+                            <span class="checkmark"></span>
+                            ⚡ Экспресс-тест (превью 30 сек / 4 слайда) — быстрая проверка субтитров и обложки за 20 сек
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Generate Button -->
+                <button class="btn-generate" id="btnGenerate" onclick="startGeneration()">
+                    <span class="btn-icon">🚀</span>
+                    <span class="btn-text">Сгенерировать ролик</span>
+                    <div class="btn-shine"></div>
+                </button>
+            </section>
+
+            <!-- Progress Panel -->
+            <section class="panel progress-panel" id="progressPanel" style="display: none;">
+                <div class="panel-header">
+                    <h2>⚙️ Генерация</h2>
+                    <span class="job-topic" id="jobTopic"></span>
+                    <button type="button" class="btn-cancel-job" id="btnCancelJob" onclick="cancelCurrentJob()" title="Прервать текущую генерацию">
+                        🛑 Прервать и сбросить
+                    </button>
+                </div>
+                
+                <!-- Queue Status Box (when multiple jobs are queued) -->
+                <div class="queue-status-box" id="queueStatusBox" style="display: none;">
+                    <div class="queue-status-header">
+                        <span class="queue-status-badge">⏳ ОЧЕРЕДЬ ГЕНЕРАЦИИ (<span id="queueCount">0</span>)</span>
+                        <span class="queue-status-sub">Задачи выполняются поочередно</span>
+                    </div>
+                    <div class="queue-items-list" id="queueItemsList"></div>
+                </div>
+
+                <!-- Progress Bar -->
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                        <div class="progress-glow" id="progressGlow"></div>
+                    </div>
+                    <div class="progress-info">
+                        <span class="progress-percent" id="progressPercent">0%</span>
+                        <span class="progress-step" id="progressStep">Инициализация...</span>
+                    </div>
+                </div>
+
+                <!-- Clickbait Title Display & View Script Button -->
+                <div class="title-banner-card" id="titleBannerCard" style="display: none;">
+                    <div class="title-banner-header">
+                        <span class="badge-clickbait">🔥 СФОРМИРОВАН КЛИКБЕЙТНЫЙ ЗАГОЛОВОК</span>
+                        <button type="button" class="btn-script-view" id="btnScriptView" onclick="openScriptModal()">
+                            📝 Посмотреть текст новости
+                        </button>
+                    </div>
+                    <div class="title-banner-text" id="titleBannerText"></div>
+                    <div class="title-banner-ru" id="titleBannerRu" style="display: none; color: #60a5fa; font-size: 14px; margin-top: 4px; font-weight: 500;">
+                        🇷🇺 <span id="titleBannerRuText"></span>
+                    </div>
+                    <div class="title-banner-thumb" id="titleBannerThumb" style="display: none; color: #34d399; font-size: 13px; margin-top: 6px; font-weight: 500;">
+                        🖼️ На обложке: <strong id="titleBannerThumbOrig"></strong> <span id="titleBannerThumbRu" style="color: #a7f3d0; opacity: 0.9;"></span>
+                    </div>
+                    <div class="title-banner-lead" id="titleBannerLead" style="display: none; color: #fbbf24; font-size: 14px; margin-top: 6px; font-weight: 600;"></div>
+                </div>
+
+                <!-- Factual Sources Confirmation Banner in Progress -->
+                <div class="sources-banner-card" id="sourcesBannerCard" style="display: none;">
+                    <div class="sources-banner-header">
+                        <div class="sources-badge-title">
+                            <span class="sources-status-dot"></span>
+                            <span class="badge-facts">✅ ФАКТУРА ПОДТВЕРЖДЕНА</span>
+                            <span class="sources-stat-badge" id="sourcesStatBadge">0 статей · 0 знаков</span>
+                        </div>
+                        <button type="button" class="btn-sources-view" id="btnSourcesView" onclick="openSourcesModal()">
+                            📰 Проверить первоисточники и факты
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Live Activity / Search Query Box -->
+                <div class="live-activity-box" id="liveActivityBox" style="display: none;">
+                    <span class="live-pulse"></span>
+                    <span class="live-label">Действие:</span>
+                    <span class="live-text" id="liveActivityText"></span>
+                </div>
+
+                <!-- Slide Review Prompt Banner (when awaiting_slide_review) -->
+                <div class="slide-review-banner" id="slideReviewBanner" style="display: none;">
+                    <div class="slide-review-banner-glow"></div>
+                    <div class="slide-review-banner-content">
+                        <div class="slide-review-badge">
+                            <span class="slide-review-pulse"></span>
+                            ⏸️ ТРЕБУЕТСЯ ПРОВЕРКА СЛАЙДОВ
+                        </div>
+                        <h3 class="slide-review-title">Слайды для видео подготовлены</h3>
+                        <p class="slide-review-desc">
+                            Подготовлено <b id="slideReviewCount">0</b> слайдов. Проверьте отобранные кадры, отметьте ненужные или замените неподходящие перед запуском сборки видео.
+                        </p>
+                        <div class="slide-review-actions">
+                            <button type="button" class="btn-slide-review primary" onclick="openSlideReviewModal()">
+                                <span>🎨</span> Открыть Студию слайдов (<span id="slideReviewBtnCount">0</span>)
+                            </button>
+                            <button type="button" class="btn-slide-review approve" onclick="approveSlidesDirect()">
+                                <span>🚀</span> Утвердить и продолжить сборку →
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Steps Timeline -->
+                <div class="steps-timeline" id="stepsTimeline">
+                    <div class="step" data-step="search_started">
+                        <div class="step-icon">🔍</div>
+                        <div class="step-info">
+                            <span class="step-title">Поиск новостей</span>
+                            <span class="step-status">Ожидание</span>
+                        </div>
+                    </div>
+                    <div class="step" data-step="script_started">
+                        <div class="step-icon">✍️</div>
+                        <div class="step-info">
+                            <span class="step-title">Генерация сценария</span>
+                            <span class="step-status">Ожидание</span>
+                        </div>
+                    </div>
+                    <div class="step" data-step="tts_started">
+                        <div class="step-icon">🔊</div>
+                        <div class="step-info">
+                            <span class="step-title">Озвучка</span>
+                            <span class="step-status">Ожидание</span>
+                        </div>
+                    </div>
+                    <div class="step" data-step="images_started">
+                        <div class="step-icon">🖼️</div>
+                        <div class="step-info">
+                            <span class="step-title">Поиск изображений</span>
+                            <span class="step-status">Ожидание</span>
+                        </div>
+                    </div>
+                    <div class="step" data-step="video_started">
+                        <div class="step-icon">🎬</div>
+                        <div class="step-info">
+                            <span class="step-title">Сборка видео</span>
+                            <span class="step-status">Ожидание</span>
+                        </div>
+                    </div>
+                    <div class="step" data-step="thumbnail_started">
+                        <div class="step-icon">🎨</div>
+                        <div class="step-info">
+                            <span class="step-title">Обложка YouTube</span>
+                            <span class="step-status">Ожидание</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Results Panel -->
+            <section class="panel results-panel" id="resultsPanel" style="display: none;">
+                <div class="panel-header">
+                    <h2>✅ Результат</h2>
+                    <button class="btn-new" onclick="resetGenerator()">+ Новый ролик</button>
+                </div>
+
+                <div class="result-card">
+                    <div class="result-title" id="resultTitle"></div>
+                    <div class="result-title-ru" id="resultTitleRu" style="display: none; color: #60a5fa; font-size: 15px; margin: 4px 0 10px 0; font-weight: 500;">
+                        🇷🇺 Перевод: <span id="resultTitleRuText"></span>
+                    </div>
+                    <div class="result-description" id="resultDescription"></div>
+                    
+                    <div class="result-stats">
+                        <div class="stat">
+                            <span class="stat-value" id="statScript">-</span>
+                            <span class="stat-label">знаков</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-value" id="statSegments">-</span>
+                            <span class="stat-label">сегментов</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-value" id="statImages">-</span>
+                            <span class="stat-label">изображений</span>
+                        </div>
+                    </div>
+
+                    <!-- YouTube Thumbnail Card & Studio Button -->
+                    <div class="result-thumb-box">
+                        <div class="result-thumb-wrapper">
+                            <img id="resultThumbImg" src="" alt="Обложка YouTube" />
+                            <div class="result-thumb-overlay">
+                                <button type="button" class="btn-thumb-modal-open" onclick="openThumbnailModal()">
+                                    <span>🎨</span> Сменить / перегенерировать обложку
+                                </button>
+                            </div>
+                        </div>
+                        <div class="result-thumb-info" id="resultThumbInfo" style="margin-top: 8px; font-size: 13px; color: var(--text-secondary); text-align: center; display: none;">
+                            🖼️ Надпись на обложке: <strong id="resultThumbHook" style="color: #fff;"></strong>
+                            <div id="resultThumbHookRu" style="color: #34d399; font-size: 12px; margin-top: 2px;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Factual Sources Confirmation Card in Results -->
+                    <div class="result-sources-card" id="resultSourcesCard" style="display: none;">
+                        <div class="result-sources-header">
+                            <div class="result-sources-left">
+                                <span class="sources-big-icon">📰</span>
+                                <div>
+                                    <div class="result-sources-title">
+                                        <span>Проверенная фактура первоисточников</span>
+                                        <span class="sources-verified-pill">✓ Проверено</span>
+                                    </div>
+                                    <div class="result-sources-sub" id="resultSourcesSub">
+                                        0 статей с полным текстом (0 знаков) переданы в Gemini
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="result-sources-actions">
+                                <button type="button" class="btn-sources-inspect" onclick="openSourcesModal()">
+                                    🔍 Посмотреть статьи и факты
+                                </button>
+                                <button type="button" class="btn-sources-close" onclick="closeResultSourcesCard()" title="Закрыть уведомление">
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="download-buttons">
+                        <a class="btn-download btn-download-primary" id="btnDownloadVideo">
+                            <span>📹</span> Скачать видео (MP4)
+                        </a>
+                        <a class="btn-download" id="btnDownloadThumb">
+                            <span>🖼️</span> Обложка YouTube
+                        </a>
+                        <a class="btn-download" id="btnDownloadScript">
+                            <span>📝</span> Сценарий (TXT)
+                        </a>
+                        <a class="btn-download" id="btnDownloadSubs">
+                            <span>💬</span> Субтитры (SRT)
+                        </a>
+                        <button type="button" class="btn-download btn-download-sources" onclick="openSourcesModal()">
+                            <span>📰</span> Фактура и источники
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Error Panel -->
+            <section class="panel error-panel" id="errorPanel" style="display: none;">
+                <div class="panel-header">
+                    <h2>❌ Ошибка</h2>
+                </div>
+                <div class="error-message" id="errorMessage"></div>
+                <button class="btn-new" onclick="resetGenerator()">Попробовать снова</button>
+            </section>
+
+            <!-- History Panel -->
+            <section class="panel history-panel" id="historyPanel">
+                <div class="panel-header">
+                    <h2>📋 История генераций</h2>
+                </div>
+                <div class="history-list" id="historyList">
+                    <div class="history-empty">Пока нет завершённых генераций</div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <span>News Video Generator v1.0</span>
+            <span>•</span>
+            <span>Gemini AI + Edge-TTS + MoviePy</span>
+        </footer>
+    </div>
+
+    <!-- Script Modal -->
+    <div class="modal-backdrop" id="scriptModal" style="display: none;" onclick="closeScriptModal(event)">
+        <div class="modal-dialog" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span class="modal-badge">СЦЕНАРИЙ НОВОСТИ</span>
+                    <h3 id="modalScriptTitle">Текст новости</h3>
+                </div>
+                <button class="modal-close" onclick="closeScriptModal()">&times;</button>
+            </div>
+            <div class="modal-meta" id="modalScriptMeta"></div>
+            <div class="modal-body" id="modalScriptBody"></div>
+            <div class="modal-footer">
+                <button type="button" class="btn-sources-inspect" style="padding: 9px 16px; font-size: 13px; margin-right: auto;" onclick="openSourcesModal()">
+                    📰 Первоисточники и факты
+                </button>
+                <button class="btn-copy" id="btnCopyScript" onclick="copyScriptText()">
+                    <span>📋</span> Скопировать весь текст
+                </button>
+                <button class="btn-close-modal" onclick="closeScriptModal()">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sources and Raw News Modal -->
+    <div class="modal-backdrop" id="sourcesModal" style="display: none;" onclick="closeSourcesModal(event)">
+        <div class="modal-dialog sources-dialog" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span class="modal-badge facts-badge">ПОДТВЕРЖДЕНИЕ ФАКТУРЫ ДЛЯ ИИ</span>
+                    <h3 id="modalSourcesTitle">Проверенные первоисточники и тексты</h3>
+                </div>
+                <button class="modal-close" onclick="closeSourcesModal()">&times;</button>
+            </div>
+            <div class="modal-meta" id="modalSourcesMeta"></div>
+            <div class="modal-body sources-modal-body" id="modalSourcesBody">
+                <div style="text-align:center;padding:30px;color:var(--text-muted)">⏳ Загрузка первоисточников...</div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-close-modal" onclick="closeSourcesModal()">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Thumbnail Studio Modal -->
+    <div class="modal-backdrop" id="thumbnailModal" style="display: none;" onclick="closeThumbnailModal(event)">
+        <div class="modal-dialog thumb-studio-dialog" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span class="modal-badge">СТУДИЯ ОБЛОЖКИ</span>
+                    <h3>🎨 Настройка обложки YouTube</h3>
+                </div>
+                <button class="modal-close" onclick="closeThumbnailModal()">&times;</button>
+            </div>
+            
+            <div class="modal-body" style="padding: 16px 24px;">
+                <!-- Live Interactive Preview Stage -->
+                <div class="thumb-preview-wrap" id="thumbPreviewStage">
+                    <img id="modalThumbPreview" src="" alt="Предпросмотр обложки" />
+                    
+                    <!-- Interactive Visual Overlay Layer -->
+                    <div class="thumb-live-stage" id="thumbLiveStage">
+                        <!-- Live Cinematic Gradient Behind Text -->
+                        <div id="thumbGradientLive" class="thumb-gradient-live"></div>
+
+                        <!-- Live Topic Badge -->
+                        <div id="thumbBadgeLive" class="thumb-badge-live" style="display: none;">
+                            <span id="thumbBadgeLiveText">● НОВОСТИ</span>
+                        </div>
+
+                        <!-- Draggable Text Box -->
+                        <div id="thumbDragBox" class="thumb-drag-box" title="Зажмите и перетащите мышкой в любое удобное место кадра">
+                            <div class="thumb-drag-anchor" id="thumbDragHandle">
+                                <span class="drag-icon">✥</span>
+                                <span>Перетащите текст</span>
+                            </div>
+                            <div id="thumbDragContent" class="thumb-drag-content"></div>
+                        </div>
+
+                        <!-- YouTube Safe Zone (Timestamp badge in bottom-right corner) -->
+                        <div id="thumbYtSafeZone" class="thumb-safe-badge" title="Зона таймкода YouTube (не закрывайте текстом)">
+                            <span class="safe-time">03:20</span>
+                            <span class="safe-label">Плеер YouTube</span>
+                        </div>
+                    </div>
+
+                    <div class="thumb-loading-overlay" id="thumbLoadingOverlay" style="display: none;">
+                        <div class="thumb-loading-spinner"></div>
+                        <span id="thumbLoadingText">Генерация новой обложки...</span>
+                    </div>
+                </div>
+
+                <!-- Visual Editor Toolbar (Font size, position, mirror) -->
+                <div class="thumb-toolbar">
+                    <div class="thumb-toolbar-group">
+                        <label class="thumb-tool-label">Размер текста:</label>
+                        <div class="thumb-tool-controls">
+                            <input type="range" id="thumbFontSizeSlider" min="36" max="115" value="64" class="thumb-slider" oninput="onThumbSliderChange(this.value)" />
+                            <span id="thumbFontSizeVal" class="thumb-val-badge">Авто</span>
+                            <button type="button" class="btn-thumb-chip active" onclick="setThumbFontSizePreset(null)" id="chipFontAuto">Авто</button>
+                            <button type="button" class="btn-thumb-chip" onclick="setThumbFontSizePreset(64)" id="chipFont64">Крупный (64)</button>
+                            <button type="button" class="btn-thumb-chip" onclick="setThumbFontSizePreset(92)" id="chipFont92">💥 Гигантский (2-3 слова)</button>
+                        </div>
+                    </div>
+
+                    <div class="thumb-toolbar-group">
+                        <label class="thumb-tool-label">Позиция и привязка:</label>
+                        <div class="thumb-tool-controls">
+                            <div class="thumb-chip-group">
+                                <button type="button" class="btn-thumb-chip active" id="btnAlignLeft" onclick="setThumbAlign('left')" title="Прижать текст влево">⇤ Слева</button>
+                                <button type="button" class="btn-thumb-chip" id="btnAlignCenter" onclick="setThumbAlign('center')" title="Центрировать текст">↔ Центр</button>
+                                <button type="button" class="btn-thumb-chip" id="btnAlignRight" onclick="setThumbAlign('right')" title="Прижать текст вправо">⇥ Справа</button>
+                            </div>
+                            <div class="thumb-chip-group">
+                                <button type="button" class="btn-thumb-chip" onclick="setThumbPosQuick('top')" title="Поднять наверх">⇡ Верх</button>
+                                <button type="button" class="btn-thumb-chip" onclick="setThumbPosQuick('mid')" title="По центру высоты">↕ Центр</button>
+                                <button type="button" class="btn-thumb-chip" onclick="setThumbPosQuick('bottom')" title="Опустить вниз">⇣ Низ</button>
+                                <button type="button" class="btn-thumb-chip" onclick="resetThumbTextPos()" title="Сбросить координаты">↺ Сброс</button>
+                            </div>
+                            <div class="thumb-chip-group">
+                                <button type="button" class="btn-thumb-chip" id="btnFlipPhoto" onclick="toggleThumbFlip()" title="Отразить фото зеркально по горизонтали">🪞 Отразить фото</button>
+                                <button type="button" class="btn-thumb-chip active" id="btnToggleSafeZone" onclick="toggleSafeZone()" title="Показать/скрыть метку времени YouTube">👁 Зона YouTube</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Controls -->
+                <div class="thumb-controls">
+                    <div class="thumb-row">
+                        <div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                <label class="thumb-field-label" style="margin-bottom: 0;">Текст на обложке (2–4 убойных слова капсом):</label>
+                                <button type="button" class="btn-thumb-action" id="btnAiRegenTitle" onclick="generateAiHeadlineVariants()" style="padding: 3px 10px; font-size: 12px; color: #34d399; border-color: rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.15);" title="Придумать новые цепляющие варианты заголовка с помощью AI">
+                                    <span>✨</span> Варианты AI
+                                </button>
+                            </div>
+                            <input type="text" id="modalThumbTitle" class="thumb-input" placeholder="КЛИКБЕЙТНЫЙ ЗАГОЛОВОК" oninput="onThumbTitleInput()" />
+                            <div id="modalThumbTitleRu" style="color: #60a5fa; font-size: 12px; margin-top: 4px; display: none;">
+                                🇷🇺 Перевод: <span id="modalThumbTitleRuText"></span>
+                            </div>
+                            <!-- AI Suggested Variants List -->
+                            <div id="modalThumbVariantsWrap" style="display: none; margin-top: 8px; background: rgba(0,0,0,0.35); border: 1px solid var(--border); border-radius: 8px; padding: 10px;">
+                                <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; font-weight: 600; display: flex; justify-content: space-between;">
+                                    <span>💡 Варианты кликбейта от AI (кликните, чтобы выбрать):</span>
+                                    <span style="cursor: pointer; color: #ff6b6b;" onclick="document.getElementById('modalThumbVariantsWrap').style.display='none'">✕ скрыть</span>
+                                </div>
+                                <div id="modalThumbVariantsList" style="display: flex; flex-direction: column; gap: 6px;"></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                <label class="thumb-field-label" style="margin-bottom: 0;">Рубрика (плашка):</label>
+                                <label class="thumb-badge-toggle" title="Включить или полностью убрать красную плашку">
+                                    <input type="checkbox" id="modalThumbShowBadge" onchange="onThumbBadgeToggle()" checked />
+                                    <span>Вкл</span>
+                                </label>
+                            </div>
+                            <div style="position: relative;">
+                                <input type="text" id="modalThumbTopic" class="thumb-input" placeholder="Очистите, чтобы скрыть" oninput="onThumbTopicInput()" style="padding-right: 32px;" />
+                                <button type="button" class="btn-clear-badge" onclick="clearThumbTopic()" title="Полностью убрать плашку">✕</button>
+                            </div>
+                            <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Снимите галочку или сотрите текст — плашка исчезнет.</div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="thumb-field-label">Поиск нового фонового фото:</label>
+                        <div class="thumb-search-bar">
+                            <input type="text" id="modalThumbQuery" class="thumb-input" placeholder="Например: Олаф Шольц трибуна, Черное море корабль, Путин Кремль..." onkeydown="if(event.key==='Enter') searchThumbCandidates()" />
+                            <button type="button" class="btn-thumb-action primary" onclick="searchThumbCandidates()">
+                                <span>🔎</span> Найти
+                            </button>
+                            <button type="button" class="btn-thumb-action" onclick="quickRandomThumb()">
+                                <span>🎲</span> Другое фото
+                            </button>
+                            <input type="file" id="modalThumbFile" accept="image/*" style="display: none;" onchange="handleThumbFileUpload(event)" />
+                            <button type="button" class="btn-thumb-action" onclick="document.getElementById('modalThumbFile').click()" title="Загрузить фото с компьютера">
+                                <span>📁</span> Своё фото
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Candidates Gallery -->
+                    <div id="thumbCandidatesSection" style="display: none;">
+                        <label class="thumb-field-label" id="thumbCandidatesLabel">Выберите понравившееся фото (кликните):</label>
+                        <div class="thumb-candidates-grid" id="thumbCandidatesGrid"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" class="btn-close-modal" style="background: var(--bg-secondary); border: 1px solid var(--border); color: var(--text-primary);" onclick="closeThumbnailModal()">Закрыть</button>
+                <button type="button" class="btn-close-modal" id="btnSaveThumbModal" onclick="applyAndSaveThumbnail()">✓ Применить текст и сохранить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Completion Modal (displayed when a job completes) -->
+    <div class="modal-backdrop" id="jobCompletedModal" style="display: none;" onclick="closeCompletedModal(event)">
+        <div class="modal-dialog modal-dialog-completed" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span class="modal-badge badge-success">🎉 РОЛИК УСПЕШНО ГОТОВ</span>
+                    <h3 id="completedModalTitle">Название ролика</h3>
+                    <div id="completedModalTitleRu" style="display: none; color: #60a5fa; font-size: 14px; margin-top: 4px; font-weight: 500;"></div>
+                </div>
+                <button type="button" class="modal-close" onclick="closeCompletedModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="completed-modal-layout">
+                    <div class="completed-thumb-wrap">
+                        <img id="completedModalThumb" src="" alt="Обложка" />
+                        <div class="completed-thumb-badge">✓ Готово к публикации</div>
+                    </div>
+                    <div class="completed-details">
+                        <div class="completed-topic-tag" id="completedModalTopic">ТЕМА</div>
+                        <div id="completedModalThumbText" style="display: none; font-size: 13px; color: #34d399; margin: 4px 0 8px 0;"></div>
+                        <div class="completed-meta-stats" id="completedModalStats">
+                            <span>⏱️ ~12 мин</span> · <span>📝 15 000 знаков</span>
+                        </div>
+                        <p class="completed-subtext" id="completedModalSubtext">
+                            Видео смонтировано, аудио сведено и субтитры наложены.
+                        </p>
+                        <div class="completed-actions-grid">
+                            <a class="btn-completed-action btn-primary" id="btnCompletedVideo" href="#" target="_blank">
+                                <span>📹</span> Скачать видео (MP4)
+                            </a>
+                            <a class="btn-completed-action" id="btnCompletedThumb" href="#" target="_blank">
+                                <span>🖼️</span> Скачать обложку
+                            </a>
+                            <button type="button" class="btn-completed-action btn-edit-thumb" id="btnCompletedEditThumb" onclick="openThumbFromCompletedModal()">
+                                <span>🎨</span> Редактировать обложку
+                            </button>
+                            <button type="button" class="btn-completed-action" id="btnCompletedScript" onclick="openScriptFromCompletedModal()">
+                                <span>📝</span> Сценарий
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Next Queue Job Info Card -->
+                <div class="completed-queue-card" id="completedQueueCard" style="display: none;">
+                    <div class="completed-queue-icon">⚡</div>
+                    <div class="completed-queue-info">
+                        <div class="completed-queue-head">СЛЕДУЮЩИЙ РОЛИК УЖЕ В РАБОТЕ:</div>
+                        <div class="completed-queue-topic" id="completedQueueTopic">Следующая тема...</div>
+                    </div>
+                    <button type="button" class="btn-queue-switch" onclick="switchActiveFromModal()">
+                        Смотреть процесс →
+                    </button>
+                </div>
+            </div>
+            <div class="modal-footer" style="justify-content: space-between;">
+                <button type="button" class="btn-modal-link" onclick="openFullResultsFromModal()">
+                    Открыть полную страницу этого ролика
+                </button>
+                <button type="button" class="btn-close-modal" onclick="closeCompletedModal()">
+                    Продолжить работу
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Telegram Settings Modal -->
+    <div class="modal-backdrop" id="telegramModal" style="display: none;" onclick="closeTelegramModal(event)">
+        <div class="modal-dialog modal-dialog-telegram" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span class="modal-badge badge-telegram">✈️ TELEGRAM УВЕДОМЛЕНИЯ</span>
+                    <h3>Уведомления о готовности видео</h3>
+                </div>
+                <button type="button" class="modal-close" onclick="closeTelegramModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="telegram-intro">
+                    Подключите Telegram-бота, чтобы мгновенно получать готовые видео, обложки и ссылки на скачивание прямо на телефон или ПК.
+                </p>
+                <div class="telegram-form">
+                    <div class="form-group" style="margin-bottom: 14px;">
+                        <label for="tgBotToken" class="thumb-field-label">Токен бота (Bot Token):</label>
+                        <input type="text" id="tgBotToken" class="thumb-input" placeholder="7123456789:AAH..." />
+                        <span class="form-hint" style="font-size: 12px; color: var(--text-muted); display: block; margin-top: 4px;">Создайте бота в <b>@BotFather</b> и скопируйте HTTP API Token</span>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 14px;">
+                        <label for="tgChatId" class="thumb-field-label">Ваш Chat ID:</label>
+                        <input type="text" id="tgChatId" class="thumb-input" placeholder="123456789" />
+                        <span class="form-hint" style="font-size: 12px; color: var(--text-muted); display: block; margin-top: 4px;">Узнайте свой ID у бота <b>@userinfobot</b> (число из поля Id)</span>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 14px;">
+                        <label for="tgServerUrl" class="thumb-field-label">Публичный адрес сервера:</label>
+                        <input type="text" id="tgServerUrl" class="thumb-input" value="http://45.147.31.53:8501" />
+                        <span class="form-hint" style="font-size: 12px; color: var(--text-muted); display: block; margin-top: 4px;">Адрес, который бот будет вставлять в кнопки скачивания</span>
+                    </div>
+                    <div id="tgStatusAlert" style="display: none; padding: 12px; border-radius: 8px; font-size: 14px; margin-top: 10px;"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-thumb-action" id="btnTestTelegram" onclick="testTelegramSettings()">
+                    <span>✉️</span> Отправить тест
+                </button>
+                <button type="button" class="btn-close-modal" id="btnSaveTelegram" onclick="saveTelegramSettings()">
+                    ✓ Сохранить настройки
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Slide Review Studio Modal -->
+    <div class="modal-backdrop" id="slideReviewModal" style="display: none;" onclick="closeSlideReviewModal(event)">
+        <div class="modal-dialog modal-dialog-slides" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="modal-badge badge-warning">🎨 СТУДИЯ СЛАЙДОВ</span>
+                        <span class="slide-modal-status-badge" id="slideModalStatusBadge">Ожидание проверки</span>
+                    </div>
+                    <h3 id="slideModalTopic">Проверка отобранных кадров</h3>
+                </div>
+                <button type="button" class="modal-close" onclick="closeSlideReviewModal()">&times;</button>
+            </div>
+            
+            <!-- Controls bar -->
+            <div class="slide-modal-toolbar">
+                <div class="slide-toolbar-left">
+                    <div class="slide-filter-group">
+                        <button type="button" class="slide-filter-btn active" data-filter="all" onclick="filterSlides('all')">
+                            Все (<span id="countAllSlides">0</span>)
+                        </button>
+                        <button type="button" class="slide-filter-btn filter-flagged" data-filter="flagged" onclick="filterSlides('flagged')">
+                            ❌ На замену (<span id="countFlaggedSlides">0</span>)
+                        </button>
+                        <button type="button" class="slide-filter-btn filter-replaced" data-filter="replaced" onclick="filterSlides('replaced')">
+                            ✓ Заменённые (<span id="countReplacedSlides">0</span>)
+                        </button>
+                    </div>
+                    <div class="slide-search-box">
+                        <input type="text" id="slideSearchInput" placeholder="Поиск по тексту или запросу..." oninput="onSlideSearchInput(this.value)" />
+                    </div>
+                </div>
+                <div class="slide-toolbar-right">
+                    <button type="button" class="btn-bulk-replace" id="btnBulkReplace" onclick="replaceFlaggedSlidesBatch()" disabled>
+                        <span>🔄</span> Заменить отмеченные (<span id="countFlaggedAction">0</span>)
+                    </button>
+                </div>
+            </div>
+
+            <div class="modal-body slide-modal-body">
+                <!-- Slides Grid -->
+                <div class="slides-grid-container" id="slidesGridContainer">
+                    <div class="slides-grid" id="slidesGrid">
+                        <!-- Rendered dynamically -->
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer slide-modal-footer">
+                <div class="slide-footer-info">
+                    <span>💡 Кликните <b>«Подобрать фото»</b> для ручного выбора или отметьте галочкой <b>«На замену»</b> для автозамены</span>
+                </div>
+                <div class="slide-footer-buttons">
+                    <button type="button" class="btn-close-modal" onclick="closeSlideReviewModal()">
+                        Закрыть (пауза продолжится)
+                    </button>
+                    <button type="button" class="btn-approve-slides" id="btnApproveSlides" onclick="approveAndCompileVideo()">
+                        <span>🚀</span> Утвердить и начать сборку видео →
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Slide Candidate Picker Modal -->
+    <div class="modal-backdrop" id="slideCandidateModal" style="display: none;" onclick="closeSlideCandidateModal(event)">
+        <div class="modal-dialog modal-dialog-candidates" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span class="modal-badge badge-info">🔎 ВЫБОР ФОТО ДЛЯ СЛАЙДА #<span id="candidateSlideIndex">0</span></span>
+                    <h3 id="candidateSlideTitle">Подбор альтернативного изображения</h3>
+                </div>
+                <button type="button" class="modal-close" onclick="closeSlideCandidateModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="candidate-modal-layout">
+                    <!-- Current Slide Preview -->
+                    <div class="candidate-current-wrap">
+                        <label class="thumb-field-label">Текущее фото слайда:</label>
+                        <div class="candidate-current-img-box">
+                            <img id="candidateCurrentImg" src="" alt="Текущее фото" />
+                            <div class="candidate-current-badge">Сейчас в видео</div>
+                        </div>
+                        <div class="candidate-current-text" id="candidateCurrentText"></div>
+                    </div>
+                    
+                    <!-- Search & Selection Panel -->
+                    <div class="candidate-search-panel">
+                        <label class="thumb-field-label">Поисковый запрос для фото:</label>
+                        <div class="candidate-search-row">
+                            <input type="text" id="candidateSearchInput" class="thumb-input" placeholder="Введите тему или имя..." />
+                            <button type="button" class="btn-thumb-action primary" onclick="searchCandidatePhotos()">
+                                <span>🔎</span> Найти
+                            </button>
+                            <button type="button" class="btn-thumb-action" onclick="cycleFromPoolCandidate()">
+                                <span>🎲</span> Из пула
+                            </button>
+                            <input type="file" id="candidateCustomFileInput" accept="image/*" style="display: none;" onchange="handleCandidateFileUpload(event)" />
+                            <button type="button" class="btn-thumb-action" onclick="document.getElementById('candidateCustomFileInput').click()">
+                                <span>📁</span> Своё
+                            </button>
+                        </div>
+                        <div class="candidate-presets-row" id="candidatePresetsRow">
+                            <button type="button" class="btn-preset-chip" onclick="applyCandidatePreset('topic')" title="Искать по теме ролика">
+                                🏷️ Тема выпуска
+                            </button>
+                            <button type="button" class="btn-preset-chip" onclick="applyCandidatePreset('title')" title="Искать по заголовку статьи">
+                                📰 Заголовок новости
+                            </button>
+                            <button type="button" class="btn-preset-chip" onclick="applyCandidatePreset('politics')" title="Политики и дебаты">
+                                👥 Политики и дебаты
+                            </button>
+                            <button type="button" class="btn-preset-chip" onclick="applyCandidatePreset('action')" title="Контроль и действия">
+                                🛡️ Контроль и события
+                            </button>
+                        </div>
+                        
+                        <div id="candidateLoadingIndicator" style="display: none; padding: 20px; text-align: center; color: var(--accent);">
+                            <div class="spinner" style="margin: 0 auto 10px auto;"></div>
+                            <span>Поиск лучших новостных фото...</span>
+                        </div>
+                        
+                        <div class="candidates-results-box" id="candidatesResultsBox">
+                            <label class="thumb-field-label">Нажмите на понравившееся фото для мгновенной замены:</label>
+                            <div class="candidates-results-grid" id="candidatesResultsGrid"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-close-modal" onclick="closeSlideCandidateModal()">
+                    Отмена
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Acute Topics Modal -->
+    <div class="modal-backdrop" id="acuteTopicsModal" style="display: none;" onclick="closeAcuteTopicsModal(event)">
+        <div class="modal-dialog" style="max-width: 940px; width: 95%; max-height: 90vh; display: flex; flex-direction: column;" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span class="modal-badge facts-badge">⚡ АКТУАЛЬНАЯ ПОВЕСТКА ДНЯ</span>
+                    <h3 style="display: flex; align-items: center; gap: 8px;">
+                        Острые сюжеты и актуальные ракурсы дня
+                    </h3>
+                </div>
+                <button type="button" class="modal-close" onclick="closeAcuteTopicsModal()">&times;</button>
+            </div>
+            <div class="modal-meta" style="padding: 10px 24px; font-size: 13px; color: var(--text-secondary); border-bottom: 1px solid var(--border); background: rgba(0,0,0,0.2); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                <div>
+                    💡 Выберите острый инфоповод в 1 клик. Уже выбранные темы <b>не повторяются</b>.
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <span id="acuteCounterInfo" style="font-size: 12px; color: #34d399; font-weight: 600;"></span>
+                    <button type="button" id="btnAcuteResetHistory" onclick="resetAcuteHistoryUI()" title="Сбросить историю использованных тем, чтобы снова увидеть все ракурсы" style="background: none; border: none; color: #94a3b8; font-size: 12px; text-decoration: underline; cursor: pointer; padding: 0;">
+                        ↺ Сбросить историю
+                    </button>
+                </div>
+            </div>
+            <div class="modal-body" style="overflow-y: auto; padding: 20px 24px; flex: 1;">
+                <div id="acuteTopicsLoadingIndicator" style="display: none; padding: 40px 20px; text-align: center; color: var(--accent);">
+                    <div class="spinner" style="margin: 0 auto 12px auto;"></div>
+                    <span style="font-size: 14px; font-weight: 500;">Сбор свежих ракурсов и актуальных заголовков агентств...</span>
+                </div>
+                <div class="acute-topics-grid" id="acuteTopicsGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 14px;"></div>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; gap: 12px;">
+                <button type="button" class="btn-thumb-action" id="btnAcuteNextBatch" onclick="loadNextAcuteBatch()" style="padding: 8px 16px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(245, 158, 11, 0.4); color: #fbbf24; background: rgba(245, 158, 11, 0.15); cursor: pointer; border-radius: 6px;">
+                    <span>🔄</span> Показать другие сюжеты
+                </button>
+                <span style="font-size: 12px; color: var(--text-muted);">
+                    💡 При выборе карточки тема отмечается как использованная
+                </span>
+                <button type="button" class="btn-close-modal" onclick="closeAcuteTopicsModal()">
+                    Закрыть
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

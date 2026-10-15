@@ -1,0 +1,3 @@
+file 'file:///C:/Users/mikro/Downloads/NEWS/temp/07ff7e80/images/slide_000_00_prepared.jpg'
+duration 2.0
+file 'file:///C:/Users/mikro/Downloads/NEWS/temp/07ff7e80/images/slide_000_00_prepared.jpg'
