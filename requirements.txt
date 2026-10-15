@@ -15,7 +15,7 @@ trafilatura==2.0.0
 httpx==0.28.1
 
 # Image processing
-Pillow>=9.2.0,<11.0
+Pillow>=10.0.0
 
 # Video processing
 moviepy==2.1.2
