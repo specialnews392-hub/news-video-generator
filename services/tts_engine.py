@@ -407,11 +407,16 @@ def _calculate_segment_timings_from_boundaries(
     return timings
 
 
+import time
+
+# Runtime in-memory cooldown tracker: (api_key, model_name) -> expire_timestamp
+# IMPORTANT: Keys are NEVER deleted from gemini_keys.txt because quotas reset daily!
+_GEMINI_COOLDOWNS: dict[tuple[str, str], float] = {}
+COOLDOWN_DURATION_SEC = 300  # 5 minutes runtime cooldown for key+model pair on 429
+
 GEMINI_TTS_MODELS = [
     "gemini-3.8-flash-tts",
     "gemini-3.8-flash-lite-tts",
-    "gemini-3.1-flash-tts-preview",
-    "gemini-2.5-flash-preview-tts",
 ]
 
 
@@ -441,7 +446,8 @@ async def check_gemini_tts_status() -> dict:
         for _ in range(2):
             key = config.get_random_gemini_key()
             try:
-                client = genai.Client(api_key=key)
+                http_opts = types.HttpOptions(base_url=config.GEMINI_BASE_URL) if getattr(config, "GEMINI_BASE_URL", None) else None
+                client = genai.Client(api_key=key, http_options=http_opts)
                 resp = await asyncio.to_thread(
                     client.models.generate_content,
                     model=m,
@@ -472,14 +478,15 @@ async def check_gemini_tts_status() -> dict:
         "summary": (
             f"✅ Gemini TTS активен ({total_active}/{len(GEMINI_TTS_MODELS)} моделей доступно на {keys_count} ключах)"
             if total_active > 0 else
-            "⚠️ Квота Gemini TTS исчерпана на сегодня (429). Видео автоматически озвучится через Edge-TTS (Conrad/Dmitry)."
+            "⚠️ Квота Gemini TTS исчерпана на сегодня (429). Подождите суточного сброса квоты Google или добавьте новые ключи."
         )
     }
 
 
-async def _synthesize_gemini_single_chunk(text: str, voice_name: str, max_retries: int = 12) -> tuple[bytes, float]:
+async def _synthesize_gemini_single_chunk(text: str, voice_name: str, max_retries: int = None) -> tuple[bytes, float]:
     """
-    Synthesize text chunk via Gemini TTS with automatic API key rotation and multi-model fallback on 429.
+    Synthesize text chunk via Gemini TTS with intelligent API key rotation,
+    model fallback (3.8-flash -> 3.8-flash-lite), and runtime 429 cooldowns.
     Returns (mp3_bytes, duration_ms).
     """
     from google import genai
@@ -491,14 +498,39 @@ async def _synthesize_gemini_single_chunk(text: str, voice_name: str, max_retrie
         return silence_mp3, 1000.0
 
     exe = imageio_ffmpeg.get_ffmpeg_exe()
+    now = time.time()
+
+    # Clean up expired cooldowns in memory
+    expired = [k for k, exp in _GEMINI_COOLDOWNS.items() if exp <= now]
+    for k in expired:
+        _GEMINI_COOLDOWNS.pop(k, None)
+
+    all_keys = config.GEMINI_KEYS
+    if not all_keys:
+        raise ValueError("No Gemini API keys found in gemini_keys.txt")
+
+    # Build candidates: try all keys with gemini-3.8-flash-tts and gemini-3.8-flash-lite-tts
+    start_idx = getattr(config, "_key_index", 0)
+    non_cooldown_candidates = []
+    cooldown_candidates = []
+
+    for offset in range(len(all_keys)):
+        k = all_keys[(start_idx + offset) % len(all_keys)]
+        for m in GEMINI_TTS_MODELS:
+            if (k, m) not in _GEMINI_COOLDOWNS:
+                non_cooldown_candidates.append((k, m))
+            else:
+                cooldown_candidates.append((k, m))
+
+    # Prioritize healthy pairs; if all are in cooldown, retry all pairs anyway
+    candidates = non_cooldown_candidates if non_cooldown_candidates else cooldown_candidates
+    attempts_limit = max_retries or len(candidates)
     last_err = None
 
-    for attempt in range(max_retries):
-        key = config.get_next_gemini_key()
-        # Rotate model across attempts if encountering quota issues
-        model_name = GEMINI_TTS_MODELS[attempt % len(GEMINI_TTS_MODELS)]
+    for attempt, (key, model_name) in enumerate(candidates[:attempts_limit]):
         try:
-            client = genai.Client(api_key=key)
+            http_opts = types.HttpOptions(base_url=config.GEMINI_BASE_URL) if getattr(config, "GEMINI_BASE_URL", None) else None
+            client = genai.Client(api_key=key, http_options=http_opts)
             config_obj = types.GenerateContentConfig(
                 response_modalities=["AUDIO"],
                 speech_config=types.SpeechConfig(
@@ -507,7 +539,6 @@ async def _synthesize_gemini_single_chunk(text: str, voice_name: str, max_retrie
                     )
                 )
             )
-            # Run in thread so the async event loop stays responsive
             resp = await asyncio.to_thread(
                 client.models.generate_content,
                 model=model_name,
@@ -540,11 +571,16 @@ async def _synthesize_gemini_single_chunk(text: str, voice_name: str, max_retrie
 
         except Exception as e:
             last_err = e
-            logger.warning(f"Gemini TTS attempt {attempt + 1}/{max_retries} (model {model_name}) failed: {e}")
-            await asyncio.sleep(0.3 + random.uniform(0.1, 0.3))
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                _GEMINI_COOLDOWNS[(key, model_name)] = time.time() + COOLDOWN_DURATION_SEC
+                logger.warning(f"Gemini TTS 429 on model {model_name} (key ...{key[-6:]}). In-memory cooldown {COOLDOWN_DURATION_SEC}s.")
+            else:
+                logger.warning(f"Gemini TTS attempt {attempt + 1} (model {model_name}) failed: {e}")
+            await asyncio.sleep(0.1 + random.uniform(0.05, 0.15))
 
-    logger.error(f"Gemini TTS failed after {max_retries} attempts: {last_err}")
-    raise RuntimeError(f"Gemini TTS quota or generation failed: {last_err}")
+    logger.error(f"Gemini TTS failed after testing available keys: {last_err}")
+    raise RuntimeError(f"Все доступные ключи Gemini исчерпали квоту (429). Дождитесь суточного сброса квоты Google или добавьте новые ключи.")
 
 
 async def _synthesize_gemini_speech(
@@ -575,10 +611,10 @@ async def _synthesize_gemini_speech(
     # Quick probe to test Gemini TTS quota availability before starting full batch
     logger.info("Probing Gemini TTS availability and quota...")
     try:
-        await _synthesize_gemini_single_chunk("Hallo.", voice_name, max_retries=min(len(config.GEMINI_KEYS), 6))
+        await _synthesize_gemini_single_chunk("Hallo.", voice_name)
     except Exception as e:
-        logger.warning(f"Gemini TTS quota probe failed: {e}")
-        raise RuntimeError(f"Gemini TTS quota exhausted across API keys: {e}")
+        logger.error(f"Gemini TTS quota probe failed: {e}")
+        raise RuntimeError(f"Квота Gemini TTS исчерпана на всех доступных ключах (429). {e}")
 
     logger.info(f"Synthesizing {len(clean_segs)} segments using Gemini TTS ({voice_name})")
     if progress_callback:
@@ -697,24 +733,15 @@ async def generate_segmented_speech(
             gemini_voice = "Charon"
         else:
             gemini_voice = gemini_voice.capitalize()
-        try:
-            return await _synthesize_gemini_speech(
-                segments=segments,
-                voice_name=gemini_voice,
-                output_dir=output_dir,
-                lang=lang,
-                full_text=full_text,
-                progress_callback=progress_callback,
-            )
-        except Exception as e:
-            fallback_voice = config.TTS_VOICES.get(lang, config.TTS_VOICES.get("ru", "ru-RU-DmitryNeural"))
-            logger.warning(
-                f"Gemini TTS unavailable or quota exhausted ({e}). "
-                f"Falling back seamlessly to Edge-TTS Neural ({fallback_voice}) for the entire video."
-            )
-            if progress_callback:
-                progress_callback(0, f"Лимит Gemini TTS исчерпан. Переключение на Edge-TTS ({fallback_voice})...")
-            voice = fallback_voice
+        # STRICT: When Gemini voice is selected, generate STRICTLY via Gemini (NO silent fallback to Edge-TTS!)
+        return await _synthesize_gemini_speech(
+            segments=segments,
+            voice_name=gemini_voice,
+            output_dir=output_dir,
+            lang=lang,
+            full_text=full_text,
+            progress_callback=progress_callback,
+        )
     
     if not full_text:
         full_text = "\n\n".join(segments)
