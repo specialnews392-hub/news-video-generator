@@ -2,6 +2,7 @@
 Speech Aligner - High-precision word and sentence alignment using faster-whisper.
 Aligns Gemini TTS audio with script segments to ensure 100% exact synchronization
 between speech, visual slides, and karaoke subtitles.
+Strictly 1-line, stable, non-jumping subtitles with zero start delay.
 """
 import logging
 import re
@@ -71,17 +72,18 @@ def _ms_to_ass_time(ms: float) -> str:
 
 def _generate_subtitles_from_words(
     words: list[dict],
-    max_phrase_chars: int = 34,
-    max_phrase_words: int = 6,
+    max_phrase_chars: int = 24,
+    max_phrase_words: int = 4,
 ) -> tuple[str, str, str]:
     """
-    Generate SRT, VTT, and ASS karaoke subtitles directly from aligned word timestamps.
-    ASS karaoke features dynamic word highlighting at exact millisecond boundaries.
+    Generate strictly 1-line, non-jumping SRT, VTT, and ASS karaoke subtitles.
+    WrapStyle: 2 and compact phrases (2-4 words, ~22 chars) guarantee text never wraps
+    or twitches between 1 and 2 lines.
     """
     if not words:
         return "", "", ""
 
-    # Group words into natural subtitle phrases
+    # Group words into natural, compact 1-line subtitle phrases
     phrases = []
     current_phrase = []
     current_chars = 0
@@ -99,13 +101,13 @@ def _generate_subtitles_from_words(
         if prev_word:
             prev_text = prev_word["word"].strip()
             # 1. Punctuation break (sentence or strong clause boundary)
-            if any(prev_text.endswith(p) for p in [".", "!", "?", "…", ";", ":"]):
+            if any(prev_text.endswith(p) for p in [".", "!", "?", "…"]):
                 is_break = True
-            # 2. Spoken pause break (silence > 600ms)
-            elif w["start_ms"] - prev_word["end_ms"] > 600.0:
+            # 2. Spoken pause break (silence > 450ms)
+            elif w["start_ms"] - prev_word["end_ms"] > 450.0:
                 is_break = True
-            # 3. Length or word-count threshold
-            elif current_chars + w_len > max_phrase_chars or len(current_phrase) >= max_phrase_words:
+            # 3. Strict 1-line cap: max 24 chars or max 4 words
+            elif current_chars + 1 + w_len > max_phrase_chars or len(current_phrase) >= max_phrase_words:
                 is_break = True
 
         if is_break and current_phrase:
@@ -114,7 +116,7 @@ def _generate_subtitles_from_words(
             current_chars = w_len
         else:
             current_phrase.append(w)
-            current_chars += w_len + 1
+            current_chars += (w_len + 1) if len(current_phrase) > 1 else w_len
 
     if current_phrase:
         phrases.append(current_phrase)
@@ -123,14 +125,17 @@ def _generate_subtitles_from_words(
     vtt_lines = ["WEBVTT\n"]
     counter = 1
 
+    # ASS Header with WrapStyle: 2 (no word wrap) to strictly enforce 1 single line
     ass_header = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1920
 PlayResY: 1080
+WrapStyle: 2
+ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: NewsKaraoke,Arial,42,&H00FFFFFF,&H0000D7FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3.5,1.5,2,40,40,55,1
+Style: NewsKaraoke,Arial,40,&H00FFFFFF,&H0000D7FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3.2,1.2,2,100,100,65,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -142,10 +147,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             continue
         p_start_ms = p[0]["start_ms"]
         p_end_ms = p[-1]["end_ms"]
+        extended_end_ms = p_end_ms + 250.0  # gentle tail to prevent blinking
         phrase_text = " ".join(w["word"] for w in p)
-
-        # Extend phrase end slightly if followed by small pause to prevent subtitle flicker
-        extended_end_ms = p_end_ms + 200.0
 
         # SRT & VTT
         start_str = _ms_to_srt_time(p_start_ms)
@@ -163,17 +166,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         vtt_lines.append("")
         counter += 1
 
-        # ASS Karaoke events with exact word timestamps
+        # Continuous ASS Karaoke timeline without inter-word disappearing gaps
         for i, target_word_info in enumerate(p):
             w_start = target_word_info["start_ms"]
-            # Word highlight ends when next word starts (or at word end for last word)
+            # First word starts at phrase start
+            if i == 0 and p_start_ms < w_start:
+                w_start = p_start_ms
+
+            # Active highlight ends exactly when the next word starts (no gaps!)
             if i < len(p) - 1:
-                w_end = min(p[i + 1]["start_ms"], target_word_info["end_ms"] + 250)
+                w_end = p[i + 1]["start_ms"]
             else:
                 w_end = extended_end_ms
 
             if w_end <= w_start:
-                w_end = w_start + 180
+                w_end = w_start + 180.0
 
             formatted_parts = []
             for j, w_info in enumerate(p):
@@ -211,9 +218,9 @@ def _align_slide_timings(
         for s in segments:
             dur = total_duration_ms * (len(s) / tot_chars)
             timings.append({
-                "start_ms": cur,
-                "end_ms": cur + dur,
-                "duration_ms": max(1000.0, dur),
+                "start_ms": float(cur),
+                "end_ms": float(cur + dur),
+                "duration_ms": float(max(1000.0, dur)),
             })
             cur += dur
         return timings
@@ -283,16 +290,16 @@ def align_speech(
     audio_dur_ms = (len(audio_np) / 16000.0) * 1000.0
 
     # 2. Transcribe with word timestamps
+    # CRITICAL: Do NOT use initial_prompt! Passing initial_prompt causes Whisper
+    # to think the first 20-30 seconds were already spoken, skipping the beginning of subtitles!
     model = get_whisper_model("base")
     whisper_lang = lang[:2].lower() if lang else "ru"
 
-    initial_prompt = full_text[:400] if full_text else None
     whisper_segments, info = model.transcribe(
         audio_np,
         language=whisper_lang,
         word_timestamps=True,
-        vad_filter=True,
-        initial_prompt=initial_prompt,
+        vad_filter=False,  # Audio from TTS is clean; vad_filter=False ensures 0.0s start is never cut
     )
 
     all_words = []
@@ -313,9 +320,10 @@ def align_speech(
                     "prob": getattr(w, "probability", 1.0),
                 })
 
-    logger.info(f"Speech alignment complete: {len(all_words)} words, {len(all_boundaries)} speech segments ({audio_dur_ms / 1000:.1f}s)")
+    first_word_time = f"{all_words[0]['start_ms'] / 1000:.2f}s" if all_words else "None"
+    logger.info(f"Speech alignment complete: {len(all_words)} words (first at {first_word_time}), {len(all_boundaries)} speech segments ({audio_dur_ms / 1000:.1f}s)")
 
-    # 3. Generate exact subtitles
+    # 3. Generate exact 1-line subtitles
     srt_content, vtt_content, ass_content = _generate_subtitles_from_words(all_words)
 
     subs_srt_path = output_dir / "subtitles.srt"
