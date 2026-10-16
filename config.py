@@ -44,11 +44,29 @@ def get_random_gemini_key() -> str:
         raise ValueError("No Gemini API keys found in gemini_keys.txt")
     return random.choice(GEMINI_KEYS)
 
-# === Image API Keys ===
+# === Image API Keys & Cloudflare Proxy ===
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")  # Pexels key issuance paused
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "57828495-1dce467eaf711523347304b33")
 UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY", "jEZe1ipjRckExo0VfUT4Er86nYU49bfNjbj7AorIHRc")
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY", "")
+
+IMAGE_PROXY_FILE = BASE_DIR / "image_proxy_worker.txt"
+
+def get_image_proxy_worker() -> str:
+    """Get custom Cloudflare Worker image proxy URL if configured."""
+    env_val = os.getenv("IMAGE_PROXY_WORKER_URL", "").strip()
+    if env_val:
+        return env_val.rstrip("/")
+    if IMAGE_PROXY_FILE.exists():
+        try:
+            val = IMAGE_PROXY_FILE.read_text(encoding="utf-8").strip()
+            if val:
+                return val.rstrip("/")
+        except Exception:
+            pass
+    return ""
+
+IMAGE_PROXY_WORKER_URL = get_image_proxy_worker()
 
 # === TTS Voices (Edge-TTS Neural voices) ===
 # Each voice has: id, edge_name, display_name, lang, gender

@@ -285,12 +285,31 @@ async def search_images(query: str, count_per_source: int = 15) -> list[dict]:
     return combined
 
 
+def get_image_proxy_url(target_url: str) -> str:
+    """
+    Format target image URL through Cloudflare proxy.
+    If custom IMAGE_PROXY_WORKER_URL is configured (from Cloudflare Worker), use:
+      https://worker-name.subdomain.workers.dev/?url={target_url}
+    Otherwise fallback to Cloudflare wsrv.nl edge proxy:
+      https://wsrv.nl/?url={clean_target}&output=jpg&n=-1
+    """
+    from urllib.parse import quote
+    worker = config.get_image_proxy_worker() if hasattr(config, "get_image_proxy_worker") else getattr(config, "IMAGE_PROXY_WORKER_URL", "")
+    if worker:
+        sep = "&" if "?" in worker else "?"
+        return f"{worker}{sep}url={quote(target_url, safe='')}"
+    
+    clean = re.sub(r'^https?://', '', target_url)
+    return f"https://wsrv.nl/?url={quote(clean, safe='')}&output=jpg&n=-1"
+
+
 async def download_image(
     url: str,
     save_path: str | Path,
     forbidden_hashes: set[str] = None,
     is_user_selection: bool = False,
     fallback_url: str = None,
+    allow_proxy: bool = True,
 ) -> bool:
     """
     Download image from URL to local path.
@@ -305,13 +324,15 @@ async def download_image(
     if not is_user_selection and domain and domain in _DEAD_DOMAINS:
         return False
     
-    # Custom headers tailored per provider / domain to bypass hotlink protection
     req_headers = dict(HEADERS)
     if "unsplash.com" in domain:
         req_headers["Referer"] = "https://unsplash.com/"
     elif "yandex.net" in domain or "yandex.ru" in domain:
         req_headers["Referer"] = "https://yandex.ru/"
-    elif domain:
+    elif "wikimedia.org" in domain or "wikipedia.org" in domain:
+        req_headers["User-Agent"] = "NewsVideoGenerator/1.0 (https://github.com/news-video; news-bot@app.com)"
+        req_headers["Referer"] = "https://commons.wikimedia.org/"
+    elif domain and not domain.endswith(".workers.dev") and "wsrv.nl" not in domain:
         req_headers["Referer"] = f"https://{domain}/"
     
     try:
@@ -327,7 +348,7 @@ async def download_image(
                     raise ValueError("Invalid content-type")
             
             content = resp.content
-            min_size = 1000 if is_user_selection else 3000
+            min_size = 3000
             if len(content) < min_size:
                 logger.warning(f"Download rejected: image too small ({len(content)} bytes) for {url[:60]}")
                 raise ValueError("File too small")
@@ -352,32 +373,55 @@ async def download_image(
                 save_path.unlink(missing_ok=True)
                 raise ValueError("Corrupted image")
                 
-            # Geometry check
-            if is_user_selection:
-                # User explicitly picked this image: accept any valid image (>= 100x100)
-                # Video compiler's _prepare_image automatically crops/scales cleanly via LANCZOS
-                min_w = 100
-                min_h = 100
-            else:
-                min_w = MIN_WIDTH
-                min_h = MIN_HEIGHT
-                if w < h:
-                    save_path.unlink(missing_ok=True)
-                    return False
+            # Strict HD resolution and horizontal framing check
+            min_w = 700 if is_user_selection else MIN_WIDTH
+            min_h = 390 if is_user_selection else MIN_HEIGHT
+            
+            # 16:9 news video requires horizontal framing: reject vertical/portrait
+            if w < h:
+                logger.warning(f"Image rejected: vertical/portrait format ({w}x{h}) for {url[:60]}")
+                save_path.unlink(missing_ok=True)
+                return False
                 
             if w < min_w or h < min_h:
-                logger.warning(f"Image rejected: resolution {w}x{h} below minimum required ({min_w}x{min_h})")
+                logger.warning(f"Image rejected: resolution {w}x{h} below HD minimum ({min_w}x{min_h}) for {url[:60]}")
                 save_path.unlink(missing_ok=True)
-                raise ValueError("Resolution too low")
+                raise ValueError(f"Resolution {w}x{h} below required HD {min_w}x{min_h}")
             
             return True
     except Exception as e:
-        logger.warning(f"Primary download failed for {url[:60]}: {e}")
+        logger.warning(f"Direct download failed for {url[:60]}: {e}")
         save_path.unlink(missing_ok=True)
-        # Attempt fallback if available
+        
+        # 1. Retry full original image via Cloudflare Edge Proxy
+        worker_configured = bool(config.get_image_proxy_worker() if hasattr(config, "get_image_proxy_worker") else getattr(config, "IMAGE_PROXY_WORKER_URL", ""))
+        is_already_proxy = "wsrv.nl" in url or (worker_configured and config.get_image_proxy_worker() in url)
+        is_direct_cdn = any(cdn in domain for cdn in ["yandex.net", "yandex.ru", "unsplash.com", "pixabay.com"])
+        if allow_proxy and not is_already_proxy and not is_direct_cdn:
+            proxy_url = get_image_proxy_url(url)
+            logger.info(f"Retrying full-res image via Cloudflare Proxy: {proxy_url[:70]}...")
+            proxy_ok = await download_image(
+                proxy_url,
+                save_path,
+                forbidden_hashes=forbidden_hashes,
+                is_user_selection=is_user_selection,
+                fallback_url=fallback_url,
+                allow_proxy=False,
+            )
+            if proxy_ok:
+                return True
+                
+        # 2. Attempt fallback CDN URL if available
         if fallback_url and fallback_url != url:
             logger.info(f"Retrying candidate download using fallback CDN URL: {fallback_url[:60]}...")
-            return await download_image(fallback_url, save_path, forbidden_hashes=forbidden_hashes, is_user_selection=is_user_selection, fallback_url=None)
+            return await download_image(
+                fallback_url,
+                save_path,
+                forbidden_hashes=forbidden_hashes,
+                is_user_selection=is_user_selection,
+                fallback_url=None,
+                allow_proxy=True,
+            )
         return False
 
 

@@ -718,6 +718,34 @@ async def reset_acute_topics_history():
     return {"status": "ok", "message": "Acute topics history reset successfully"}
 
 
+class ImageProxySettingRequest(BaseModel):
+    worker_url: str = ""
+
+
+@app.get("/api/settings/image-proxy")
+async def get_image_proxy_setting():
+    """Get current Cloudflare image proxy status and URL."""
+    url = config.get_image_proxy_worker()
+    return {
+        "configured": bool(url),
+        "worker_url": url,
+        "mode": "custom_cloudflare_worker" if url else "edge_proxy_wsrv"
+    }
+
+
+@app.post("/api/settings/image-proxy")
+async def set_image_proxy_setting(req: ImageProxySettingRequest):
+    """Save Cloudflare Worker URL to image_proxy_worker.txt."""
+    u = req.worker_url.strip().rstrip("/")
+    config.IMAGE_PROXY_FILE.write_text(u, encoding="utf-8")
+    config.IMAGE_PROXY_WORKER_URL = u
+    return {
+        "status": "ok",
+        "configured": bool(u),
+        "worker_url": u
+    }
+
+
 @app.get("/api/job/{job_id}/thumbnail/candidates")
 async def get_thumbnail_candidates(job_id: str, query: str = ""):
     """Find background photo candidates for this job's thumbnail, pre-validating working links."""
