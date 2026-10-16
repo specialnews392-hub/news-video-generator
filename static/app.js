@@ -2500,7 +2500,7 @@ async function searchCandidatePhotos(customQuery = null) {
                 const idx = parseInt(card.dataset.candIdx, 10);
                 const cand = window.currentCandidatesList?.[idx];
                 if (cand && cand.url) {
-                    selectCandidate(cand.url, cand.fallback_url || cand.thumbnail || '');
+                    selectCandidate(cand.url, cand.fallback_url || '', cand.thumbnail || '');
                 }
             };
         }
@@ -2510,7 +2510,7 @@ async function searchCandidatePhotos(customQuery = null) {
     }
 }
 
-async function selectCandidate(url, fallbackUrl = '') {
+async function selectCandidate(url, fallbackUrl = '', thumbUrl = '') {
     if (activeCandidateSlideIndex === null || !currentReviewJobId) return;
 
     const loader = document.getElementById('candidateLoadingIndicator');
@@ -2523,7 +2523,7 @@ async function selectCandidate(url, fallbackUrl = '') {
         const resp = await fetch(`/api/job/${currentReviewJobId}/slide/${activeCandidateSlideIndex}/select-candidate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url, fallback_url: fallbackUrl }),
+            body: JSON.stringify({ url, fallback_url: fallbackUrl, thumbnail: thumbUrl }),
         });
         if (!resp.ok) {
             const errData = await resp.json().catch(() => ({}));

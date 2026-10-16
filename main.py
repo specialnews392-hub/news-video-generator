@@ -638,18 +638,26 @@ async def proxy_thumb(url: str):
     if not url or not url.startswith("http"):
         raise HTTPException(status_code=400, detail="Invalid url")
     try:
+        domain = ""
+        try:
+            domain = httpx.URL(url).host
+        except Exception:
+            pass
+            
         ref = "https://yandex.ru/"
         if "pixabay.com" in url:
             ref = "https://pixabay.com/"
         elif "unsplash.com" in url:
             ref = "https://unsplash.com/"
+        elif domain:
+            ref = f"https://{domain}/"
             
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
             "Referer": ref,
         }
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True, verify=False) as client:
             resp = await client.get(url, headers=headers)
             if resp.status_code == 200 and resp.content:
                 ct = resp.headers.get("content-type", "image/jpeg")
@@ -785,7 +793,7 @@ async def regenerate_thumbnail(job_id: str, req: ThumbnailRegenRequest):
 
     if req.image_url:
         # User picked a specific candidate image from gallery
-        if await image_searcher.download_image(req.image_url, target_bg):
+        if await image_searcher.download_image(req.image_url, target_bg, is_user_selection=True):
             bg_image_path = str(target_bg)
     elif req.query.strip():
         # User entered a custom search query
@@ -1012,6 +1020,7 @@ class SlideCandidatesRequest(BaseModel):
 class SelectCandidateRequest(BaseModel):
     url: str
     fallback_url: str = ""
+    thumbnail: str = ""
 
 
 _IMAGE_HASH_CACHE: dict[str, str] = {}
@@ -1227,22 +1236,30 @@ async def select_slide_candidate(job_id: str, index: int, req: SelectCandidateRe
     new_path = temp_dir / f"slide_{index:03d}_user_{ts}.jpg"
     
     fallback_u = getattr(req, "fallback_url", "")
-    logger.info(f"Downloading user-selected candidate for slide {index} from URL: {req.url[:70]}...")
-    ok = await image_searcher.download_image(req.url, new_path, is_user_selection=True, fallback_url=fallback_u)
-    if not ok and fallback_u and fallback_u != req.url:
-        logger.info(f"Retrying candidate download using fallback: {fallback_u[:70]}...")
-        ok = await image_searcher.download_image(fallback_u, new_path, is_user_selection=True)
+    thumb_u = getattr(req, "thumbnail", "")
+    
+    urls_to_try = []
+    for candidate_u in [req.url, fallback_u, thumb_u]:
+        if candidate_u and candidate_u not in urls_to_try:
+            urls_to_try.append(candidate_u)
+            
+    ok = False
+    for attempt_idx, u in enumerate(urls_to_try):
+        next_fb = urls_to_try[attempt_idx + 1] if attempt_idx + 1 < len(urls_to_try) else None
+        logger.info(f"Attempting candidate download ({attempt_idx+1}/{len(urls_to_try)}) for slide {index} from: {u[:70]}...")
+        ok = await image_searcher.download_image(u, new_path, is_user_selection=True, fallback_url=next_fb)
+        if ok and new_path.exists() and new_path.stat().st_size > 0:
+            break
         
-    if not ok:
-        logger.warning(f"Failed to download candidate for slide {index} from {req.url}")
+    if not ok or not new_path.exists():
+        logger.warning(f"Failed to download candidate for slide {index} from any candidate URL: {urls_to_try}")
         raise HTTPException(status_code=400, detail="Не удалось скачать выбранное фото")
     
     # Track as used in job state
     if "used_urls" not in job:
         job["used_urls"] = []
-    job["used_urls"].append(req.url)
-    if fallback_u:
-        job["used_urls"].append(fallback_u)
+    for u in urls_to_try:
+        job["used_urls"].append(u)
         
     slides[index]["image_path"] = str(new_path)
     slides[index]["source_url"] = req.url

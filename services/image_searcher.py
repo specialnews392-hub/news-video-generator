@@ -92,6 +92,7 @@ async def search_pixabay(query: str, count: int = 15) -> list[dict]:
             if w >= h:
                 results.append({
                     "url": hit.get("largeImageURL") or hit.get("webformatURL"),
+                    "fallback_url": hit.get("webformatURL") or hit.get("previewURL"),
                     "url_medium": hit.get("webformatURL"),
                     "thumbnail": hit.get("previewURL"),
                     "width": w,
@@ -135,6 +136,7 @@ async def search_unsplash(query: str, count: int = 15) -> list[dict]:
                 urls = photo.get("urls", {})
                 results.append({
                     "url": urls.get("regular", urls.get("full")),
+                    "fallback_url": urls.get("regular") or urls.get("small"),
                     "url_medium": urls.get("regular"),
                     "thumbnail": urls.get("small"),
                     "width": w,
@@ -171,7 +173,7 @@ async def search_yandex(query: str, count: int = 25) -> list[dict]:
     }
     
     try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True, verify=False) as client:
             resp = await client.get(url, params=params, headers=headers)
             if resp.status_code != 200:
                 logger.debug(f"Yandex Images returned {resp.status_code} for '{query}'")
@@ -189,14 +191,24 @@ async def search_yandex(query: str, count: int = 25) -> list[dict]:
             )
             for thumb_part, raw_orig, raw_alt in blocks:
                 thumb_url = "https://" + py_html.unescape(thumb_part)
-                orig_url = unquote(raw_orig).replace("\\/", "/")
-                if not orig_url.startswith("http") or any(bad in orig_url.lower() for bad in [".svg", ".gif", "avatar", "icon", "logo", "telegram.org"]):
+                clean_orig = unquote(raw_orig).replace("\\/", "/")
+                if "%" in clean_orig:
+                    clean_orig = unquote(clean_orig)
+                clean_orig = clean_orig.strip()
+                if clean_orig.startswith("/http"):
+                    clean_orig = clean_orig.lstrip("/")
+                elif clean_orig.startswith("//"):
+                    clean_orig = "https:" + clean_orig
+                
+                if any(bad in clean_orig.lower() for bad in [".svg", ".gif", "avatar", "icon", "logo", "telegram.org"]):
                     continue
-                if orig_url not in seen_urls:
-                    seen_urls.add(orig_url)
+                
+                primary_url = clean_orig if clean_orig.startswith("http") else thumb_url
+                if primary_url not in seen_urls:
+                    seen_urls.add(primary_url)
                     alt_text = py_html.unescape(raw_alt) if raw_alt else query
                     results.append({
-                        "url": orig_url,
+                        "url": primary_url,
                         "fallback_url": thumb_url,
                         "url_medium": thumb_url,
                         "thumbnail": thumb_url,
@@ -212,16 +224,25 @@ async def search_yandex(query: str, count: int = 25) -> list[dict]:
             if len(results) < count:
                 raw_urls = re.findall(r'img_url=([^&"\'\s]+)', raw_html)
                 orig_urls = re.findall(r'"origUrl":"(https?:[^"]+)"', raw_html)
-                for u in orig_urls + raw_urls:
+                thumb_urls = re.findall(r'(https?://avatars\.mds\.yandex\.net/i\?id=[a-zA-Z0-9_\-]+-images-thumbs[^\s"\'<>]*)', raw_html)
+                for idx_u, u in enumerate(orig_urls + raw_urls):
                     clean = unquote(u).replace("\\/", "/")
+                    if "%" in clean:
+                        clean = unquote(clean)
+                    clean = clean.strip()
+                    if clean.startswith("/http"):
+                        clean = clean.lstrip("/")
+                    elif clean.startswith("//"):
+                        clean = "https:" + clean
                     if clean.startswith("http") and not any(bad in clean.lower() for bad in [".svg", ".gif", "avatar", "icon", "logo", "telegram.org"]):
                         if clean not in seen_urls:
                             seen_urls.add(clean)
+                            fb_thumb = thumb_urls[idx_u % len(thumb_urls)] if thumb_urls else clean
                             results.append({
                                 "url": clean,
-                                "fallback_url": clean,
-                                "url_medium": clean,
-                                "thumbnail": clean,
+                                "fallback_url": fb_thumb,
+                                "url_medium": fb_thumb,
+                                "thumbnail": fb_thumb,
                                 "width": 1920,
                                 "height": 1080,
                                 "source": "yandex",
@@ -284,32 +305,36 @@ async def download_image(
     if not is_user_selection and domain and domain in _DEAD_DOMAINS:
         return False
     
-    # Custom headers tailored per provider
+    # Custom headers tailored per provider / domain to bypass hotlink protection
     req_headers = dict(HEADERS)
     if "unsplash.com" in domain:
         req_headers["Referer"] = "https://unsplash.com/"
     elif "yandex.net" in domain or "yandex.ru" in domain:
         req_headers["Referer"] = "https://yandex.ru/"
+    elif domain:
+        req_headers["Referer"] = f"https://{domain}/"
     
     try:
-        timeout = httpx.Timeout(20.0, connect=8.0)
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        timeout = httpx.Timeout(15.0, connect=6.0)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, verify=False) as client:
             resp = await client.get(url, headers=req_headers)
             resp.raise_for_status()
             
             content_type = resp.headers.get("content-type", "").lower()
-            if "image" not in content_type and not url.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
-                logger.warning(f"Download rejected: invalid content-type '{content_type}' for {url[:60]}")
-                raise ValueError("Invalid content-type")
+            if not is_user_selection:
+                if "image" not in content_type and not url.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                    logger.warning(f"Download rejected: invalid content-type '{content_type}' for {url[:60]}")
+                    raise ValueError("Invalid content-type")
             
             content = resp.content
-            if len(content) < 3000:
+            min_size = 1000 if is_user_selection else 3000
+            if len(content) < min_size:
                 logger.warning(f"Download rejected: image too small ({len(content)} bytes) for {url[:60]}")
                 raise ValueError("File too small")
             
             # Check content hash BEFORE saving
             img_hash = hashlib.md5(content).hexdigest()
-            if forbidden_hashes is not None and img_hash in forbidden_hashes:
+            if not is_user_selection and forbidden_hashes is not None and img_hash in forbidden_hashes:
                 logger.info(f"Duplicate image hash detected ({img_hash[:8]}), skipping duplicate from {domain}")
                 return False
             
@@ -328,16 +353,17 @@ async def download_image(
                 raise ValueError("Corrupted image")
                 
             # Geometry check
-            min_w = 400 if is_user_selection else MIN_WIDTH
-            min_h = 240 if is_user_selection else MIN_HEIGHT
-            
-            if not is_user_selection and w < h:
-                save_path.unlink(missing_ok=True)
-                return False
-            elif is_user_selection and w < h * 0.75:
-                logger.warning(f"User image rejected: excessive portrait aspect ratio ({w}x{h})")
-                save_path.unlink(missing_ok=True)
-                raise ValueError("Excessive portrait aspect ratio")
+            if is_user_selection:
+                # User explicitly picked this image: accept any valid image (>= 100x100)
+                # Video compiler's _prepare_image automatically crops/scales cleanly via LANCZOS
+                min_w = 100
+                min_h = 100
+            else:
+                min_w = MIN_WIDTH
+                min_h = MIN_HEIGHT
+                if w < h:
+                    save_path.unlink(missing_ok=True)
+                    return False
                 
             if w < min_w or h < min_h:
                 logger.warning(f"Image rejected: resolution {w}x{h} below minimum required ({min_w}x{min_h})")
