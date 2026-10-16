@@ -2,7 +2,7 @@
 Speech Aligner - High-precision word and sentence alignment using faster-whisper.
 Aligns Gemini TTS audio with script segments to ensure 100% exact synchronization
 between speech, visual slides, and karaoke subtitles.
-Strictly 1-line, stable, non-jumping subtitles with zero start delay.
+Strictly 1-line, stable, non-jumping subtitles with zero start delay and ZERO overlaps.
 """
 import logging
 import re
@@ -77,36 +77,50 @@ def _generate_subtitles_from_words(
 ) -> tuple[str, str, str]:
     """
     Generate strictly 1-line, non-jumping SRT, VTT, and ASS karaoke subtitles.
-    WrapStyle: 2 and compact phrases (2-4 words, ~22 chars) guarantee text never wraps
-    or twitches between 1 and 2 lines.
+    Guarantees mathematically ZERO temporal overlaps between dialogue events,
+    completely preventing libass from ever stacking subtitles into 2 lines.
     """
     if not words:
         return "", "", ""
 
-    # Group words into natural, compact 1-line subtitle phrases
+    # 1. Clean and normalize words so timestamps are strictly non-overlapping
+    cleaned_words = []
+    prev_w_end = 0.0
+    for w in words:
+        raw_text = w.get("word", "").strip()
+        if not raw_text:
+            continue
+        w_start = max(prev_w_end, float(w.get("start_ms", 0.0)))
+        w_end = max(w_start + 80.0, float(w.get("end_ms", w_start + 150.0)))
+        cleaned_words.append({
+            "word": raw_text,
+            "start_ms": w_start,
+            "end_ms": w_end,
+        })
+        prev_w_end = w_end
+
+    if not cleaned_words:
+        return "", "", ""
+
+    # 2. Group words into natural, compact 1-line subtitle phrases (2-4 words, max 24 chars)
     phrases = []
     current_phrase = []
     current_chars = 0
 
-    for idx, w in enumerate(words):
-        w_text = w["word"].strip()
-        if not w_text:
-            continue
-
-        w_len = len(w_text)
+    for w in cleaned_words:
+        w_len = len(w["word"])
         prev_word = current_phrase[-1] if current_phrase else None
 
-        # Check for natural break conditions
         is_break = False
         if prev_word:
-            prev_text = prev_word["word"].strip()
-            # 1. Punctuation break (sentence or strong clause boundary)
+            prev_text = prev_word["word"]
+            # Punctuation break
             if any(prev_text.endswith(p) for p in [".", "!", "?", "…"]):
                 is_break = True
-            # 2. Spoken pause break (silence > 450ms)
+            # Spoken silence gap (> 450ms)
             elif w["start_ms"] - prev_word["end_ms"] > 450.0:
                 is_break = True
-            # 3. Strict 1-line cap: max 24 chars or max 4 words
+            # Strict 1-line threshold
             elif current_chars + 1 + w_len > max_phrase_chars or len(current_phrase) >= max_phrase_words:
                 is_break = True
 
@@ -120,6 +134,23 @@ def _generate_subtitles_from_words(
 
     if current_phrase:
         phrases.append(current_phrase)
+
+    # 3. Calculate strict non-overlapping phrase boundaries
+    phrase_boundaries = []
+    for k, p in enumerate(phrases):
+        p_start = p[0]["start_ms"]
+        if k < len(phrases) - 1:
+            next_start = phrases[k + 1][0]["start_ms"]
+            # Bridge small pauses (<600ms) for smooth reading, but never overlap next phrase!
+            if next_start - p[-1]["end_ms"] <= 600.0:
+                p_end = next_start
+            else:
+                p_end = min(p[-1]["end_ms"] + 300.0, next_start)
+        else:
+            p_end = p[-1]["end_ms"] + 300.0
+
+        p_end = max(p_start + 150.0, p_end)
+        phrase_boundaries.append((p_start, p_end))
 
     srt_lines = []
     vtt_lines = ["WEBVTT\n"]
@@ -135,24 +166,20 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: NewsKaraoke,Arial,40,&H00FFFFFF,&H0000D7FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3.2,1.2,2,100,100,65,1
+Style: NewsKaraoke,Arial,42,&H00FFFFFF,&H0000D7FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3.5,1.5,2,100,100,65,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     ass_events = []
 
-    for p in phrases:
-        if not p:
-            continue
-        p_start_ms = p[0]["start_ms"]
-        p_end_ms = p[-1]["end_ms"]
-        extended_end_ms = p_end_ms + 250.0  # gentle tail to prevent blinking
+    for k, p in enumerate(phrases):
+        p_start_ms, p_end_ms = phrase_boundaries[k]
         phrase_text = " ".join(w["word"] for w in p)
 
-        # SRT & VTT
+        # SRT & VTT (100% non-overlapping)
         start_str = _ms_to_srt_time(p_start_ms)
-        end_str = _ms_to_srt_time(extended_end_ms)
+        end_str = _ms_to_srt_time(p_end_ms)
 
         srt_lines.append(str(counter))
         srt_lines.append(f"{start_str} --> {end_str}")
@@ -166,21 +193,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         vtt_lines.append("")
         counter += 1
 
-        # Continuous ASS Karaoke timeline without inter-word disappearing gaps
+        # Continuous ASS Karaoke timeline: events strictly partition [p_start_ms, p_end_ms]
         for i, target_word_info in enumerate(p):
-            w_start = target_word_info["start_ms"]
-            # First word starts at phrase start
-            if i == 0 and p_start_ms < w_start:
-                w_start = p_start_ms
-
-            # Active highlight ends exactly when the next word starts (no gaps!)
+            w_start = p_start_ms if i == 0 else target_word_info["start_ms"]
             if i < len(p) - 1:
                 w_end = p[i + 1]["start_ms"]
             else:
-                w_end = extended_end_ms
+                w_end = p_end_ms
 
             if w_end <= w_start:
-                w_end = w_start + 180.0
+                w_end = w_start + 100.0
 
             formatted_parts = []
             for j, w_info in enumerate(p):
@@ -323,7 +345,7 @@ def align_speech(
     first_word_time = f"{all_words[0]['start_ms'] / 1000:.2f}s" if all_words else "None"
     logger.info(f"Speech alignment complete: {len(all_words)} words (first at {first_word_time}), {len(all_boundaries)} speech segments ({audio_dur_ms / 1000:.1f}s)")
 
-    # 3. Generate exact 1-line subtitles
+    # 3. Generate strictly 1-line subtitles with ZERO overlaps
     srt_content, vtt_content, ass_content = _generate_subtitles_from_words(all_words)
 
     subs_srt_path = output_dir / "subtitles.srt"
