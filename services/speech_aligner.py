@@ -72,13 +72,15 @@ def _ms_to_ass_time(ms: float) -> str:
 
 def _generate_subtitles_from_words(
     words: list[dict],
-    max_phrase_chars: int = 24,
-    max_phrase_words: int = 4,
+    max_phrase_chars: int = 46,
+    max_phrase_words: int = 7,
+    pause_break_ms: float = 700.0,
 ) -> tuple[str, str, str]:
     """
     Generate strictly 1-line, non-jumping SRT, VTT, and ASS karaoke subtitles.
     Guarantees mathematically ZERO temporal overlaps between dialogue events,
     completely preventing libass from ever stacking subtitles into 2 lines.
+    Comfortable 5-7 word phrases stay on screen ~3 seconds for smooth, calm reading.
     """
     if not words:
         return "", "", ""
@@ -102,7 +104,7 @@ def _generate_subtitles_from_words(
     if not cleaned_words:
         return "", "", ""
 
-    # 2. Group words into natural, compact 1-line subtitle phrases (2-4 words, max 24 chars)
+    # 2. Group words into natural 1-line subtitle phrases (5-7 words, ~44 chars max)
     phrases = []
     current_phrase = []
     current_chars = 0
@@ -114,13 +116,13 @@ def _generate_subtitles_from_words(
         is_break = False
         if prev_word:
             prev_text = prev_word["word"]
-            # Punctuation break
+            # Punctuation break (sentence end)
             if any(prev_text.endswith(p) for p in [".", "!", "?", "…"]):
                 is_break = True
-            # Spoken silence gap (> 450ms)
-            elif w["start_ms"] - prev_word["end_ms"] > 450.0:
+            # Spoken silence gap (> 700ms)
+            elif w["start_ms"] - prev_word["end_ms"] > pause_break_ms:
                 is_break = True
-            # Strict 1-line threshold
+            # Safe 1-line threshold (max 46 chars or max 7 words)
             elif current_chars + 1 + w_len > max_phrase_chars or len(current_phrase) >= max_phrase_words:
                 is_break = True
 
