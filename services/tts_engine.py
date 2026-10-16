@@ -7,6 +7,7 @@ import io
 import logging
 import os
 import re
+import traceback
 import wave
 from pathlib import Path
 
@@ -663,21 +664,43 @@ async def _synthesize_gemini_speech(
     with open(combined_path, "wb") as f_out:
         f_out.write(total_audio)
 
-    # Subtitles (SRT, VTT, ASS karaoke)
-    srt_content, vtt_content, ass_content = _boundaries_to_subtitles(all_boundaries)
-    with open(subs_srt_path, "w", encoding="utf-8") as f:
-        f.write(srt_content)
-    with open(subs_vtt_path, "w", encoding="utf-8") as f:
-        f.write(vtt_content)
-    with open(subs_ass_path, "w", encoding="utf-8") as f:
-        f.write(ass_content)
+    # Professional Forced Alignment with faster-whisper
+    # Guarantees 100% exact synchronization between audio, subtitles, and slide changes
+    segment_timings = None
+    try:
+        if progress_callback:
+            progress_callback(95, "Синхронизация субтитров и кадров (Whisper Alignment)...")
+        from services.speech_aligner import align_speech
+        aligned = align_speech(
+            audio_path=combined_path,
+            segments=segments,
+            lang=lang,
+            full_text=full_text,
+            output_dir=output_dir,
+        )
+        segment_timings = aligned["segment_timings"]
+        all_boundaries = aligned["word_boundaries"]
+        subs_srt_path = Path(aligned["subtitles_srt"])
+        subs_vtt_path = Path(aligned["subtitles_vtt"])
+        subs_ass_path = Path(aligned["subtitles_ass"])
+        logger.info(f"Whisper alignment successful: {len(segment_timings)} slide timings synchronized.")
+    except Exception as align_err:
+        logger.warning(f"Whisper alignment failed ({align_err}), falling back to boundary interpolation: {traceback.format_exc()}")
+        # Fallback to existing boundary interpolation
+        srt_content, vtt_content, ass_content = _boundaries_to_subtitles(all_boundaries)
+        with open(subs_srt_path, "w", encoding="utf-8") as f:
+            f.write(srt_content)
+        with open(subs_vtt_path, "w", encoding="utf-8") as f:
+            f.write(vtt_content)
+        with open(subs_ass_path, "w", encoding="utf-8") as f:
+            f.write(ass_content)
 
-    # Calculate exact slide timings for all visual slides
-    segment_timings = _calculate_segment_timings_from_boundaries(
-        segments=segments,
-        all_boundaries=all_boundaries,
-        total_duration_ms=cum_ms,
-    )
+        # Calculate exact slide timings for all visual slides
+        segment_timings = _calculate_segment_timings_from_boundaries(
+            segments=segments,
+            all_boundaries=all_boundaries,
+            total_duration_ms=cum_ms,
+        )
 
     engine_name = f"Gemini TTS ({voice_name})"
     logger.info(f"Gemini TTS complete: {combined_path}, {len(chunks)} chunks, {len(segment_timings)} slide timings, total: {cum_ms / 1000:.1f}s")

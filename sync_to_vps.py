@@ -15,7 +15,9 @@ except Exception:
 LOCAL_DIR = Path(__file__).resolve().parent
 
 FILES = [
-    "telegram_config.json",
+    "requirements.txt",
+    "services/speech_aligner.py",
+    "services/tts_engine.py",
     "services/telegram_notifier.py",
     "services/thumbnail_generator.py",
     "main.py",
@@ -33,6 +35,8 @@ def main():
 
     for rel in FILES:
         local_p = LOCAL_DIR / rel
+        if not local_p.exists():
+            continue
         remote_p = f"{REMOTE_DIR}/{rel.replace(chr(92), '/')}"
         print(f"Uploading: {rel} -> {remote_p}")
         sftp.put(str(local_p), remote_p)
@@ -40,7 +44,12 @@ def main():
     sftp.close()
     print("Files uploaded successfully.")
 
-    print("Restarting news-generator service...")
+    print("\nEnsuring dependencies installed on VPS (faster-whisper)...")
+    stdin, stdout, stderr = ssh.exec_command(f"{REMOTE_DIR}/venv/bin/pip install -r {REMOTE_DIR}/requirements.txt")
+    pip_out = stdout.read().decode("utf-8", errors="replace")
+    print(pip_out[-500:] if len(pip_out) > 500 else pip_out)
+
+    print("\nRestarting news-generator service...")
     stdin, stdout, stderr = ssh.exec_command("systemctl restart news-generator && sleep 2 && systemctl status news-generator --no-pager")
     out = stdout.read().decode("utf-8", errors="replace")
     err = stderr.read().decode("utf-8", errors="replace")
