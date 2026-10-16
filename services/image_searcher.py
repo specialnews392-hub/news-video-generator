@@ -348,7 +348,7 @@ async def download_image(
                     raise ValueError("Invalid content-type")
             
             content = resp.content
-            min_size = 3000
+            min_size = 1000 if is_user_selection else 3000
             if len(content) < min_size:
                 logger.warning(f"Download rejected: image too small ({len(content)} bytes) for {url[:60]}")
                 raise ValueError("File too small")
@@ -373,20 +373,21 @@ async def download_image(
                 save_path.unlink(missing_ok=True)
                 raise ValueError("Corrupted image")
                 
-            # Strict HD resolution and horizontal framing check
-            min_w = 700 if is_user_selection else MIN_WIDTH
-            min_h = 390 if is_user_selection else MIN_HEIGHT
+            # Resolution and horizontal framing check
+            # Auto-crawler strictly requires Full HD horizontal (MIN_WIDTH=800, MIN_HEIGHT=450)
+            # User manual pick: accept down to 250x140 so any crisp CDN previews work reliably if original is blocked
+            min_w = 250 if is_user_selection else MIN_WIDTH
+            min_h = 140 if is_user_selection else MIN_HEIGHT
             
-            # 16:9 news video requires horizontal framing: reject vertical/portrait
-            if w < h:
+            if not is_user_selection and w < h:
                 logger.warning(f"Image rejected: vertical/portrait format ({w}x{h}) for {url[:60]}")
                 save_path.unlink(missing_ok=True)
                 return False
                 
             if w < min_w or h < min_h:
-                logger.warning(f"Image rejected: resolution {w}x{h} below HD minimum ({min_w}x{min_h}) for {url[:60]}")
+                logger.warning(f"Image rejected: resolution {w}x{h} below minimum required ({min_w}x{min_h}) for {url[:60]}")
                 save_path.unlink(missing_ok=True)
-                raise ValueError(f"Resolution {w}x{h} below required HD {min_w}x{min_h}")
+                raise ValueError(f"Resolution {w}x{h} below required {min_w}x{min_h}")
             
             return True
     except Exception as e:

@@ -1119,7 +1119,7 @@ async def resolve_direct_url_by_title(title: str) -> str | None:
         "Accept-Language": "de-DE,de;q=0.9,en;q=0.8,ru;q=0.7",
     }
     try:
-        async with httpx.AsyncClient(timeout=6, follow_redirects=True, headers=headers) as client:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True, headers=headers) as client:
             # 1. DuckDuckGo Lite (fast, highly reliable, rarely blocked)
             try:
                 resp = await client.get("https://lite.duckduckgo.com/lite/", params={"q": clean_title})
@@ -1151,6 +1151,26 @@ async def resolve_direct_url_by_title(title: str) -> str | None:
                             return href
             except Exception:
                 pass
+
+            # 3. Cloudflare Worker fallback (if datacenter IP was rate-limited by DuckDuckGo)
+            worker = config.get_image_proxy_worker()
+            if worker:
+                try:
+                    target_ddg = f"https://lite.duckduckgo.com/lite/?q={quote_plus(clean_title)}"
+                    p_url = f"{worker}?url={quote_plus(target_ddg)}"
+                    resp = await client.get(p_url)
+                    if resp.status_code == 200:
+                        soup = BeautifulSoup(resp.text, "html.parser")
+                        for a in soup.find_all("a", class_="result-link"):
+                            href = a.get("href", "")
+                            if "uddg=" in href:
+                                target = unquote(href.split("uddg=")[1].split("&")[0])
+                                if not any(bad in target for bad in ["google.com", "duckduckgo.com", "facebook.com", "twitter.com", "youtube.com"]):
+                                    return target
+                            elif href.startswith("http") and not any(bad in href for bad in ["google.com", "duckduckgo.com"]):
+                                return href
+                except Exception:
+                    pass
     except Exception as e:
         logger.debug(f"Direct URL resolution failed for '{title}': {e}")
     return None
@@ -1177,21 +1197,35 @@ async def extract_article_text(url: str, title: str = "", client: httpx.AsyncCli
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "de-DE,de;q=0.9,en;q=0.8,ru;q=0.7",
         }
         
         async def _do_req(c):
-            resp = await c.get(decoded_url)
-            if resp.status_code != 200:
-                return ""
-            final_url = str(resp.url)
-            if "consent.google" in final_url or "consent.youtube" in final_url:
-                return ""
-            return resp.text
+            try:
+                resp = await c.get(decoded_url)
+                if resp.status_code == 200:
+                    final_url = str(resp.url)
+                    if "consent.google" not in final_url and "consent.youtube" not in final_url:
+                        return resp.text
+            except Exception as ex:
+                logger.debug(f"Direct article fetch failed for {decoded_url[:50]}: {ex}")
+
+            # If direct request returned 403 / blocked / consent, retry via Cloudflare Worker
+            worker = config.get_image_proxy_worker()
+            if worker and not decoded_url.startswith(worker):
+                try:
+                    p_url = f"{worker}?url={quote_plus(decoded_url)}"
+                    resp = await c.get(p_url)
+                    if resp.status_code == 200:
+                        return resp.text
+                except Exception as ex:
+                    logger.debug(f"Proxy article fetch failed for {decoded_url[:50]}: {ex}")
+            return ""
 
         if client is not None:
             html = await _do_req(client)
         else:
-            async with httpx.AsyncClient(timeout=6, follow_redirects=True, headers=headers) as c:
+            async with httpx.AsyncClient(timeout=12, follow_redirects=True, headers=headers) as c:
                 html = await _do_req(c)
 
         if not html or len(html) < 200:
@@ -1468,7 +1502,7 @@ async def fetch_news(topic: str, lang: str = "ru", newsapi_key: str = "", acute_
     sem = asyncio.Semaphore(6)
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
-    async with httpx.AsyncClient(timeout=7, follow_redirects=True, headers=headers) as shared_client:
+    async with httpx.AsyncClient(timeout=12, follow_redirects=True, headers=headers) as shared_client:
         async def enrich(a):
             if a.get("full_text") and len(a["full_text"]) >= 250:
                 return a
