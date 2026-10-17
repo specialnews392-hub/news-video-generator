@@ -101,28 +101,46 @@ async def compile_video(
 
 
 def _generate_crossfade_frames(img1_path: str, img2_path: str, out_dir: Path, idx: int, num_frames: int = 6) -> list[tuple[str, float]]:
-    """Generate intermediate crossfade frames between two images using OpenCV."""
+    """Generate intermediate crossfade frames between two images using Pillow (or OpenCV if available)."""
+    trans_duration = 0.48
+    frame_dur = trans_duration / num_frames
+
+    # 1. Try OpenCV if available
     try:
         import cv2
-        im1 = cv2.imread(img1_path)
-        im2 = cv2.imread(img2_path)
-        if im1 is None or im2 is None:
-            return []
-        
-        if im1.shape != im2.shape:
-            im2 = cv2.resize(im2, (im1.shape[1], im1.shape[0]))
-            
-        trans_duration = 0.48
-        frame_dur = trans_duration / num_frames
-        
-        frames = []
-        for f in range(num_frames):
-            alpha = (f + 1) / (num_frames + 1.0)
-            blend = cv2.addWeighted(im1, 1.0 - alpha, im2, alpha, 0)
-            out_file = out_dir / f"trans_{idx:03d}_{f}.jpg"
-            cv2.imwrite(str(out_file), blend, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            frames.append((str(out_file), frame_dur))
-        return frames
+        im1 = cv2.imread(str(img1_path))
+        im2 = cv2.imread(str(img2_path))
+        if im1 is not None and im2 is not None:
+            if im1.shape != im2.shape:
+                im2 = cv2.resize(im2, (im1.shape[1], im1.shape[0]))
+            frames = []
+            for f in range(num_frames):
+                alpha = (f + 1) / (num_frames + 1.0)
+                blend = cv2.addWeighted(im1, 1.0 - alpha, im2, alpha, 0)
+                out_file = out_dir / f"trans_{idx:03d}_{f}.jpg"
+                cv2.imwrite(str(out_file), blend, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                frames.append((str(out_file), frame_dur))
+            if frames:
+                return frames
+    except Exception:
+        pass
+
+    # 2. Rock-solid Pillow fallback (guaranteed in requirements.txt, works in headless Linux & Codespaces)
+    try:
+        from PIL import Image
+        with Image.open(str(img1_path)) as i1, Image.open(str(img2_path)) as i2:
+            im1 = i1.convert("RGB")
+            im2 = i2.convert("RGB")
+            if im1.size != im2.size:
+                im2 = im2.resize(im1.size, Image.BILINEAR)
+            frames = []
+            for f in range(num_frames):
+                alpha = (f + 1) / (num_frames + 1.0)
+                blend = Image.blend(im1, im2, alpha)
+                out_file = out_dir / f"trans_{idx:03d}_{f}.jpg"
+                blend.save(str(out_file), quality=85)
+                frames.append((str(out_file), frame_dur))
+            return frames
     except Exception as e:
         logger.warning(f"Failed to generate crossfade {idx}: {e}")
         return []
@@ -178,8 +196,9 @@ def _render_transition_blend(
 ) -> bool:
     """Render a buttery-smooth crossfade between clip_a tail and clip_b head using FFmpeg native blend."""
     try:
+        start_t = max(dur_a - trans_sec, 0.0)
         fc = (
-            f"[0:v]trim=start={dur_a - trans_sec:.3f}:end={dur_a:.3f},setpts=PTS-STARTPTS[v0]; "
+            f"[0:v]trim=start={start_t:.3f}:end={dur_a:.3f},setpts=PTS-STARTPTS[v0]; "
             f"[1:v]trim=start=0:end={trans_sec:.3f},setpts=PTS-STARTPTS[v1]; "
             f"[v0][v1]blend=all_expr='A*(1-T/{trans_sec:.3f})+B*(T/{trans_sec:.3f})'[vout]"
         )
@@ -213,19 +232,33 @@ def _generate_ken_burns_clip(
 ) -> bool:
     """Generate a single clip with silky-smooth Ken Burns camera pan/zoom motion.
     Every pattern starts at zoom 1.000 (full frame) to eliminate any initial jump or twitching.
+    Works reliably with or without OpenCV (falls back to Pillow or native image).
     """
     in_file = str(img_path)
     up_created = False
     try:
-        import cv2
-        im = cv2.imread(str(img_path))
-        if im is not None:
-            # Upscale 2.5x to 4800x2700 — takes only ~0.08s and eliminates zoompan coordinate jitter
-            up_path = str(Path(out_clip_path).with_suffix('')) + f"_up_{idx}.jpg"
-            up = cv2.resize(im, (4800, 2700), interpolation=cv2.INTER_LINEAR)
-            cv2.imwrite(up_path, up, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            in_file = up_path
-            up_created = True
+        # Graceful high-res upscale: eliminates zoompan integer coordinate jitter
+        # Try cv2 first, then Pillow, then fallback to original in_file without failing
+        try:
+            import cv2
+            im = cv2.imread(str(img_path))
+            if im is not None:
+                up_path = str(Path(out_clip_path).with_suffix('')) + f"_up_{idx}.jpg"
+                up = cv2.resize(im, (4800, 2700), interpolation=cv2.INTER_LINEAR)
+                cv2.imwrite(up_path, up, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                in_file = up_path
+                up_created = True
+        except Exception:
+            try:
+                from PIL import Image
+                with Image.open(str(img_path)) as im:
+                    up_path = str(Path(out_clip_path).with_suffix('')) + f"_up_{idx}.jpg"
+                    up = im.resize((4800, 2700), Image.BILINEAR)
+                    up.save(up_path, quality=85)
+                    in_file = up_path
+                    up_created = True
+            except Exception:
+                in_file = str(img_path)
 
         num_frames = max(1, int(round(duration * fps)))
         pattern = idx % 4
@@ -437,9 +470,11 @@ def _compile_video_ffmpeg(
                     for i in range(num_slides):
                         chunk_p = kb_chunks_dir / f"chunk_{i:04d}.mp4"
                         if i == 0:
-                            subprocess.run([ffmpeg_path, '-y', '-i', str(sorted_clips[0]), '-t', f"{durations[0] - trans_sec:.3f}", '-c', 'copy', str(chunk_p)], capture_output=True)
+                            c_dur = max(durations[0] - trans_sec, 0.1)
+                            subprocess.run([ffmpeg_path, '-y', '-i', str(sorted_clips[0]), '-t', f"{c_dur:.3f}", '-c', 'copy', str(chunk_p)], capture_output=True)
                         elif i < num_slides - 1:
-                            subprocess.run([ffmpeg_path, '-y', '-ss', f"{trans_sec:.3f}", '-i', str(sorted_clips[i]), '-t', f"{durations[i] - trans_sec:.3f}", '-c', 'copy', str(chunk_p)], capture_output=True)
+                            c_dur = max(durations[i] - trans_sec, 0.1)
+                            subprocess.run([ffmpeg_path, '-y', '-ss', f"{trans_sec:.3f}", '-i', str(sorted_clips[i]), '-t', f"{c_dur:.3f}", '-c', 'copy', str(chunk_p)], capture_output=True)
                         else:
                             subprocess.run([ffmpeg_path, '-y', '-ss', f"{trans_sec:.3f}", '-i', str(sorted_clips[i]), '-t', f"{durations[i]:.3f}", '-c', 'copy', str(chunk_p)], capture_output=True)
 
