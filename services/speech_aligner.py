@@ -13,18 +13,31 @@ from typing import Optional, List, Dict, Any, Tuple
 import numpy as np
 import imageio_ffmpeg
 
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+if "OMP_NUM_THREADS" not in os.environ:
+    os.environ["OMP_NUM_THREADS"] = "4"
+if "CT2_NUM_THREADS" not in os.environ:
+    os.environ["CT2_NUM_THREADS"] = "4"
+
 logger = logging.getLogger(__name__)
 
 _whisper_model = None
 
 
 def get_whisper_model(model_size: str = "base"):
-    """Lazy-loaded cached WhisperModel singleton."""
+    """Lazy-loaded cached WhisperModel singleton with controlled thread count."""
     global _whisper_model
     if _whisper_model is None:
         from faster_whisper import WhisperModel
         logger.info(f"Loading faster-whisper model ({model_size}) for speech alignment...")
-        _whisper_model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        _whisper_model = WhisperModel(
+            model_size,
+            device="cpu",
+            compute_type="int8",
+            cpu_threads=4,
+            num_workers=1,
+        )
         logger.info("faster-whisper model loaded successfully.")
     return _whisper_model
 
@@ -323,7 +336,11 @@ def align_speech(
         audio_np,
         language=whisper_lang,
         word_timestamps=True,
-        vad_filter=False,  # Audio from TTS is clean; vad_filter=False ensures 0.0s start is never cut
+        vad_filter=True,
+        vad_parameters=dict(min_silence_duration_ms=300),
+        beam_size=1,
+        best_of=1,
+        condition_on_previous_text=False,
     )
 
     all_words = []

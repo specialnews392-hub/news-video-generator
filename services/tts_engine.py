@@ -671,12 +671,16 @@ async def _synthesize_gemini_speech(
         if progress_callback:
             progress_callback(95, "Синхронизация субтитров и кадров (Whisper Alignment)...")
         from services.speech_aligner import align_speech
-        aligned = align_speech(
-            audio_path=combined_path,
-            segments=segments,
-            lang=lang,
-            full_text=full_text,
-            output_dir=output_dir,
+        aligned = await asyncio.wait_for(
+            asyncio.to_thread(
+                align_speech,
+                audio_path=combined_path,
+                segments=segments,
+                lang=lang,
+                full_text=full_text,
+                output_dir=output_dir,
+            ),
+            timeout=120.0,
         )
         segment_timings = aligned["segment_timings"]
         all_boundaries = aligned["word_boundaries"]

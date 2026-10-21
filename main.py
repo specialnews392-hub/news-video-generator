@@ -667,7 +667,25 @@ async def proxy_thumb(url: str):
                     headers={"Cache-Control": "public, max-age=86400"},
                 )
     except Exception as e:
-        logger.debug(f"Proxy thumb failed for {url[:50]}: {e}")
+        logger.debug(f"Proxy thumb direct failed for {url[:50]}: {e}")
+
+    # Fallback: try Cloudflare Edge Proxy (bypasses datacenter/GitHub IP blocks)
+    try:
+        from services.image_searcher import get_image_proxy_url
+        cf_proxy_url = get_image_proxy_url(url)
+        if cf_proxy_url and cf_proxy_url != url:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True, verify=False) as client:
+                cf_resp = await client.get(cf_proxy_url)
+                if cf_resp.status_code == 200 and cf_resp.content:
+                    ct = cf_resp.headers.get("content-type", "image/jpeg")
+                    return Response(
+                        content=cf_resp.content,
+                        media_type=ct,
+                        headers={"Cache-Control": "public, max-age=86400"},
+                    )
+    except Exception as e:
+        logger.debug(f"Proxy thumb CF fallback failed for {url[:50]}: {e}")
+
     raise HTTPException(status_code=404, detail="Image could not be retrieved")
 
 
@@ -1067,9 +1085,49 @@ def _get_cached_image_hash(p: Path) -> str:
     return h
 
 
+def _resolve_slide_image_path(job_id: str, index: int, raw_path: str) -> Optional[Path]:
+    """
+    Robustly locate slide image across OS environments (Windows / Linux / GitHub Codespaces).
+    Handles absolute paths recorded on other systems and searches relative paths and standard folders.
+    """
+    if not raw_path:
+        return None
+    try:
+        p = Path(raw_path)
+        if p.exists() and p.is_file():
+            return p
+        
+        filename = p.name
+        # 1. Search in current temp_dir / job_id / images
+        cand1 = config.TEMP_DIR / job_id / "images" / filename
+        if cand1.exists() and cand1.is_file():
+            return cand1
+        
+        # 2. Search in output_dir / temp / job_id / images
+        cand2 = config.OUTPUT_DIR / "temp" / job_id / "images" / filename
+        if cand2.exists() and cand2.is_file():
+            return cand2
+
+        # 3. Search by index pattern slide_{index:03d}_* in images dir
+        for base_img_dir in [config.TEMP_DIR / job_id / "images", config.OUTPUT_DIR / "temp" / job_id / "images"]:
+            if base_img_dir.exists():
+                matches = sorted(base_img_dir.glob(f"slide_{index:03d}_*"))
+                if matches:
+                    return matches[0]
+
+        # 4. Search in output_dir / job_id
+        cand4 = config.OUTPUT_DIR / job_id / filename
+        if cand4.exists() and cand4.is_file():
+            return cand4
+    except Exception as e:
+        logger.debug(f"Error resolving slide image path for job {job_id} slide {index}: {e}")
+
+    return None
+
+
 def _get_or_create_slide_thumbnail(job_id: str, index: int, src_path: Path, mtime: int) -> Path:
     """Generate or retrieve a fast, lightweight thumbnail (360x202) for slide moderation."""
-    thumb_dir = config.OUTPUT_DIR / "temp" / job_id / "thumbs"
+    thumb_dir = config.TEMP_DIR / job_id / "thumbs"
     thumb_dir.mkdir(parents=True, exist_ok=True)
     thumb_path = thumb_dir / f"slide_{index:03d}_{mtime}.jpg"
     if thumb_path.exists():
@@ -1099,8 +1157,8 @@ async def get_job_slides(job_id: str):
     result = []
     for s in slides:
         idx = s["index"]
-        p = Path(s["image_path"])
-        mtime = int(p.stat().st_mtime) if p.exists() else 0
+        p = _resolve_slide_image_path(job_id, idx, s.get("image_path", ""))
+        mtime = int(p.stat().st_mtime) if (p and p.exists()) else 0
         dur_ms = s.get("duration_ms", 5000)
         result.append({
             "index": idx,
@@ -1132,8 +1190,9 @@ async def get_slide_image(job_id: str, index: int, thumb: bool = False):
     slides = jobs[job_id].get("slides", [])
     if index < 0 or index >= len(slides):
         raise HTTPException(status_code=404, detail="Slide not found")
-    p = Path(slides[index]["image_path"])
-    if not p.exists():
+    
+    p = _resolve_slide_image_path(job_id, index, slides[index].get("image_path", ""))
+    if not p or not p.exists():
         raise HTTPException(status_code=404, detail="Image file not found")
     
     if thumb:
@@ -1510,7 +1569,7 @@ async def _resume_approved_video(job_id: str):
             if job.get("status") == "cancelled":
                 return
             slides = job["slides"]
-            image_paths = [s["image_path"] for s in slides]
+            image_paths = [str(_resolve_slide_image_path(job_id, s.get("index", idx), s.get("image_path", "")) or s.get("image_path", "")) for idx, s in enumerate(slides)]
             segment_timings = [{"duration_ms": s["duration_ms"]} for s in slides]
             audio_dir = config.TEMP_DIR / job_id / "audio"
             narration = audio_dir / "narration.mp3"
@@ -1929,7 +1988,7 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
                 return
 
             # Sync any slide replacements made by the user
-            image_paths = [s["image_path"] for s in job["slides"]]
+            image_paths = [str(_resolve_slide_image_path(job_id, s.get("index", idx), s.get("image_path", "")) or s.get("image_path", "")) for idx, s in enumerate(job["slides"])]
             logger.info(f"[{job_id}] ▶️ Слайды утверждены! Переход к сборке видео с {len(image_paths)} слайдами.")
 
         # ====== STEP 6: Compile Video ======

@@ -2232,7 +2232,7 @@ function renderSlidesGrid() {
         return `
             <div class="${cardClass}" id="slideCard_${s.index}">
                 <div class="slide-card-thumb-wrap" onclick="openCandidatePicker(${s.index})" title="Нажмите, чтобы подобрать альтернативное фото">
-                    <img src="${s.thumb_url || s.image_url}" data-full="${s.image_url}" alt="Слайд #${s.index + 1}" loading="lazy" id="slideImg_${s.index}" />
+                    <img src="${s.thumb_url || s.image_url}" data-full="${s.image_url}" alt="Слайд #${s.index + 1}" loading="lazy" id="slideImg_${s.index}" onerror="if(this.src!==this.dataset.full){this.src=this.dataset.full;}else{this.style.opacity='0.3';this.alt='[Фото не найдено]';}" />
                     <div class="slide-card-index-chip">
                         <span>#${s.index + 1}</span> · <span>⏱️ ${durStr}</span>
                     </div>
