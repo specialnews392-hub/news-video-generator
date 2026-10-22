@@ -2728,7 +2728,7 @@ async function openAcuteTopicsModal(isNext = false) {
                         <div style="font-size: 13px; margin-bottom: 16px;">
                             Вы можете сбросить историю просмотров, чтобы увидеть все ракурсы заново.
                         </div>
-                        <button type="button" class="btn btn-secondary" onclick="resetAcuteHistoryUI()" style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 18px; border-radius: 8px; font-weight: 600;">
+                        <button type="button" id="btnAcuteResetCenter" class="btn btn-secondary" onclick="resetAcuteHistoryUI()" style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 18px; border-radius: 8px; font-weight: 600;">
                             <span>↺</span> Сбросить историю использованных тем
                         </button>
                     </div>
@@ -2803,21 +2803,32 @@ async function loadNextAcuteBatch() {
 
 async function resetAcuteHistoryUI() {
     const resetBtn = document.getElementById('btnAcuteResetHistory');
+    const centerBtn = document.getElementById('btnAcuteResetCenter');
     if (resetBtn) {
         resetBtn.disabled = true;
         resetBtn.textContent = 'Сброс...';
     }
+    if (centerBtn) {
+        centerBtn.disabled = true;
+        centerBtn.innerHTML = '<span>⏳</span> Сбрасываем историю...';
+    }
     try {
-        await fetch('/api/topics/acute/reset-history', { method: 'POST' });
+        const res = await fetch('/api/topics/acute/reset-history', { method: 'POST' });
+        if (!res.ok) throw new Error('Ошибка сброса истории на сервере');
         acuteExcludedIds.clear();
         acuteCurrentOffset = 0;
         await openAcuteTopicsModal(false);
     } catch (e) {
         console.error('Reset history error:', e);
+        alert('Не удалось сбросить историю: ' + (e.message || e));
     } finally {
         if (resetBtn) {
             resetBtn.disabled = false;
             resetBtn.textContent = '↺ Сбросить историю';
+        }
+        if (centerBtn) {
+            centerBtn.disabled = false;
+            centerBtn.innerHTML = '<span>↺</span> Сбросить историю использованных тем';
         }
     }
 }

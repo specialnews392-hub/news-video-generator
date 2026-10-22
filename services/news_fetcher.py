@@ -1654,71 +1654,95 @@ async def get_acute_topics_preview(
         else:
             unmatched_catalog.append(ang)
 
-    # For unmatched catalog angles, search Google News strictly with when:2d / when:3d
+    # For unmatched catalog angles, search Google News strictly with when:3d and bounded concurrency
     if unmatched_catalog:
+        sem = asyncio.Semaphore(5)
         async def _fetch_angle_fresh_news(ang: dict, client: httpx.AsyncClient) -> tuple[dict, dict | None]:
             queries = ang.get("queries", [])
-            q_list = queries if queries else [ang.get("title", "")]
-            for base_q in q_list[:2]:
-                words = [w for w in base_q.split() if len(w) > 3][:4]
-                search_q = " ".join(words)
-                for time_filter in ["when:2d", "when:3d"]:
-                    full_q = f"{search_q} {time_filter}".strip()
-                    url = f"https://news.google.com/rss/search?q={quote_plus(full_q)}&hl={lang}&gl=DE&ceid=DE:{lang}"
-                    try:
-                        resp = await client.get(url)
-                        if resp.status_code == 200:
-                            feed = feedparser.parse(resp.text)
-                            for e in feed.entries[:3]:
-                                pub = e.get("published", "")
-                                if get_article_age_days(pub) <= MAX_AGE_DAYS:
-                                    src = getattr(e, "source", None)
-                                    src_name = getattr(src, "title", "") if src else "Google News"
-                                    return ang, {
-                                        "title": e.get("title", ""),
-                                        "source": src_name,
-                                        "published": pub,
-                                        "summary": e.get("summary", ""),
-                                    }
-                    except Exception:
-                        pass
+            base_q = queries[0] if queries else ang.get("title", "")
+            words = [w for w in base_q.split() if len(w) > 3][:4]
+            search_q = " ".join(words)
+            full_q = f"{search_q} when:3d".strip()
+            url = f"https://news.google.com/rss/search?q={quote_plus(full_q)}&hl={lang}&gl=DE&ceid=DE:{lang}"
+            async with sem:
+                try:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        feed = feedparser.parse(resp.text)
+                        for e in feed.entries[:3]:
+                            pub = e.get("published", "")
+                            if get_article_age_days(pub) <= MAX_AGE_DAYS:
+                                src = getattr(e, "source", None)
+                                src_name = getattr(src, "title", "") if src else "Google News"
+                                return ang, {
+                                    "title": e.get("title", ""),
+                                    "source": src_name,
+                                    "published": pub,
+                                    "summary": e.get("summary", ""),
+                                }
+                except Exception:
+                    pass
             return ang, None
 
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        async with httpx.AsyncClient(timeout=6, headers=headers) as client:
+        async with httpx.AsyncClient(timeout=4.5, headers=headers) as client:
             online_tasks = [_fetch_angle_fresh_news(ang, client) for ang in unmatched_catalog]
             online_results = await asyncio.gather(*online_tasks, return_exceptions=True)
             for res in online_results:
                 if isinstance(res, tuple) and res[1] is not None:
                     catalog_matched.append(res)
 
-    # Convert confirmed catalog matches into cards (only if fresh article exists!)
-    for ang, matched_art in catalog_matched:
-        main_q = ang["queries"][0]
-        hook_choice = random.choice(ang.get("hook_ideas", ["AKTUELLES EREIGNIS"]))
-        hook_choice_ru = ang.get("hook_ideas_ru", {}).get(hook_choice, "")
+    # Build map of matched live headlines
+    matched_map = {ang["id"]: art for ang, art in catalog_matched}
 
-        art_title = matched_art.get("title", "")
-        art_src = matched_art.get("source", "Агентство")
-        pub_raw = matched_art.get("published", "")
-        art_date = format_pub_date(pub_raw)
+    # 1. First add catalog angles with confirmed live news attached (highest freshness)
+    for ang in available_catalog:
+        if ang["id"] in matched_map:
+            matched_art = matched_map[ang["id"]]
+            main_q = ang["queries"][0]
+            hook_choice = random.choice(ang.get("hook_ideas", ["AKTUELLES EREIGNIS"]))
+            hook_choice_ru = ang.get("hook_ideas_ru", {}).get(hook_choice, "")
 
-        fresh_cards_pool.append({
-            "id": ang["id"],
-            "title": ang["title"],
-            "title_ru": ang.get("title_ru", ""),
-            "desc_ru": ang.get("desc_ru", ""),
-            "badge": ang["badge"],
-            "topic_query": main_q,
-            "hook_sample": hook_choice,
-            "hook_sample_ru": hook_choice_ru,
-            "live_headline": art_title,
-            "live_headline_ru": "",
-            "live_source": art_src,
-            "live_pub_date": art_date,
-            "is_recent": False,
-            "is_live_dynamic": False,
-        })
+            fresh_cards_pool.append({
+                "id": ang["id"],
+                "title": ang["title"],
+                "title_ru": ang.get("title_ru", ""),
+                "desc_ru": ang.get("desc_ru", ""),
+                "badge": ang["badge"],
+                "topic_query": main_q,
+                "hook_sample": hook_choice,
+                "hook_sample_ru": hook_choice_ru,
+                "live_headline": matched_art.get("title", ""),
+                "live_headline_ru": "",
+                "live_source": matched_art.get("source", "Агентство"),
+                "live_pub_date": format_pub_date(matched_art.get("published", "")),
+                "is_recent": False,
+                "is_live_dynamic": False,
+            })
+
+    # 2. Add remaining catalog angles (guarantees catalog topics are NEVER lost even if Google blocks RSS!)
+    for ang in available_catalog:
+        if ang["id"] not in matched_map:
+            main_q = ang["queries"][0]
+            hook_choice = random.choice(ang.get("hook_ideas", ["AKTUELLES EREIGNIS"]))
+            hook_choice_ru = ang.get("hook_ideas_ru", {}).get(hook_choice, "")
+
+            fresh_cards_pool.append({
+                "id": ang["id"],
+                "title": ang["title"],
+                "title_ru": ang.get("title_ru", ""),
+                "desc_ru": ang.get("desc_ru", ""),
+                "badge": ang["badge"],
+                "topic_query": main_q,
+                "hook_sample": hook_choice,
+                "hook_sample_ru": hook_choice_ru,
+                "live_headline": "",
+                "live_headline_ru": "",
+                "live_source": "",
+                "live_pub_date": "",
+                "is_recent": False,
+                "is_live_dynamic": False,
+            })
 
     # Presets for punchy clickbait hooks on dynamic live cards
     HOOK_PRESETS = [
