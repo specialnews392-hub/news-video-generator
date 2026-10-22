@@ -15,6 +15,7 @@ except Exception:
 LOCAL_DIR = Path(__file__).resolve().parent
 
 FILES = [
+    "config.py",
     "requirements.txt",
     "services/speech_aligner.py",
     "services/tts_engine.py",
