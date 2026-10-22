@@ -388,6 +388,65 @@
                     </div>
                 </div>
 
+                <!-- TTS Quota Choice Banner (when awaiting_tts_choice or waiting_tts_reset) -->
+                <div class="tts-quota-banner" id="ttsQuotaBanner" style="display: none;">
+                    <div class="tts-quota-banner-glow"></div>
+                    <div class="tts-quota-banner-content">
+                        <div class="tts-quota-badge">
+                            <span class="tts-quota-pulse"></span>
+                            ⚠️ ЛИМИТ КВОТЫ GOOGLE GEMINI TTS
+                        </div>
+                        <h3 class="tts-quota-title" id="ttsQuotaTitle">Суточный лимит Google исчерпан</h3>
+                        <p class="tts-quota-desc" id="ttsQuotaDesc">
+                            Бесплатный тариф Google Gemini TTS ограничен 10 запросами в сутки.<br>
+                            До ближайшего сброса лимита осталось: <b id="ttsQuotaResetTimer" class="tts-timer-highlight">-- ч -- мин</b> (в 00:00 UTC).
+                        </p>
+                        
+                        <div class="tts-quota-options" id="ttsQuotaOptions">
+                            <div class="tts-choice-card primary-choice" onclick="chooseTTSAction('switch_to_edge')">
+                                <div class="tts-choice-icon">🎙️</div>
+                                <div class="tts-choice-info">
+                                    <div class="tts-choice-heading">Озвучить с начала с помощью Microsoft Neural (Рекомендуется)</div>
+                                    <div class="tts-choice-sub">
+                                        Мгновенно переозвучить весь ролик без ожидания быстрым и качественным голосом <b id="ttsFallbackVoiceName">Microsoft Neural</b> (безлимитно, без ограничений).
+                                    </div>
+                                </div>
+                                <button type="button" class="btn-tts-choice primary" onclick="event.stopPropagation(); chooseTTSAction('switch_to_edge')">
+                                    <span>🎙️</span> Озвучить Microsoft →
+                                </button>
+                            </div>
+
+                            <div class="tts-choice-card secondary-choice" id="ttsChoiceWaitCard" onclick="chooseTTSAction('wait')">
+                                <div class="tts-choice-icon">⏳</div>
+                                <div class="tts-choice-info">
+                                    <div class="tts-choice-heading">Ждать до сброса лимита Google</div>
+                                    <div class="tts-choice-sub">
+                                        Приостановить задачу и дождаться автоматического сброса суточной квоты Google.
+                                    </div>
+                                </div>
+                                <button type="button" class="btn-tts-choice secondary" id="ttsChoiceWaitBtn" onclick="event.stopPropagation(); chooseTTSAction('wait')">
+                                    <span>⏳</span> Ждать сброса
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Active Waiting Status (when user chose 'wait') -->
+                        <div class="tts-waiting-status" id="ttsWaitingStatus" style="display: none;">
+                            <div class="tts-waiting-box">
+                                <div class="tts-waiting-spinner"></div>
+                                <div class="tts-waiting-text">
+                                    <div class="tts-waiting-title">Идет ожидание сброса квоты Google...</div>
+                                    <div class="tts-waiting-countdown">До сброса: <span id="ttsWaitingTimer">-- ч -- мин</span> (00:00 UTC)</div>
+                                    <div class="tts-waiting-note">Вы можете не ждать и переключить на Microsoft в любой момент:</div>
+                                </div>
+                            </div>
+                            <button type="button" class="btn-tts-choice primary" onclick="chooseTTSAction('switch_to_edge')">
+                                <span>🎙️</span> Не ждать — Озвучить Microsoft прямо сейчас →
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Steps Timeline -->
                 <div class="steps-timeline" id="stepsTimeline">
                     <div class="step" data-step="search_started">

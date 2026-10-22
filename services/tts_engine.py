@@ -18,6 +18,44 @@ import config
 logger = logging.getLogger(__name__)
 
 
+class GeminiTTSQuotaExhaustedError(RuntimeError):
+    """Raised when Gemini TTS API quota (10 requests/day or RPM) is exhausted across all available keys."""
+    def __init__(self, message: str, seconds_left: int = 0, reset_time_str: str = ""):
+        super().__init__(message)
+        self.seconds_left = seconds_left
+        self.reset_time_str = reset_time_str
+
+
+def calculate_gemini_reset_time(err: Exception = None) -> tuple[int, str]:
+    """Calculate remaining seconds and formatted string until Google's daily quota reset (00:00 UTC)."""
+    from datetime import datetime, timezone, timedelta
+    err_str = str(err) if err else ""
+    seconds_left = 0
+    m_delay = re.search(r'retryDelay["\']?:\s*["\']?(\d+)s', err_str)
+    if m_delay:
+        seconds_left = int(m_delay.group(1))
+    else:
+        m_hm = re.search(r'retry in\s+(\d+)h\s*(\d+)?m?', err_str, re.IGNORECASE)
+        if m_hm:
+            h = int(m_hm.group(1))
+            m = int(m_hm.group(2) or 0)
+            seconds_left = h * 3600 + m * 60
+
+    if seconds_left <= 0:
+        now_utc = datetime.now(timezone.utc)
+        tomorrow_utc = (now_utc + timedelta(days=1)).date()
+        midnight_utc = datetime(tomorrow_utc.year, tomorrow_utc.month, tomorrow_utc.day, 0, 0, 0, tzinfo=timezone.utc)
+        seconds_left = max(60, int((midnight_utc - now_utc).total_seconds()))
+
+    hrs = seconds_left // 3600
+    mins = (seconds_left % 3600) // 60
+    if hrs > 0:
+        time_str = f"{hrs} ч {mins:02d} мин"
+    else:
+        time_str = f"{mins} мин"
+    return seconds_left, time_str
+
+
 def _split_text_into_chunks(text: str, max_chars: int = 350) -> list[str]:
     """
     Split long text into compact chunks (~250-350 chars) at paragraph or sentence boundaries.
@@ -608,6 +646,16 @@ async def _synthesize_gemini_single_chunk(text: str, voice_name: str, max_retrie
                     logger.warning(f"Gemini TTS attempt {attempt + 1} (model {model_name}) failed: {e}")
                     await asyncio.sleep(0.5)
 
+        # Check if error is a daily quota limit or long retryDelay (e.g. > 120s or GenerateRequestsPerDay)
+        err_str = str(last_err) if last_err else ""
+        if "GenerateRequestsPerDay" in err_str or "limit: 10" in err_str or "limit '10'" in err_str:
+            logger.warning("Gemini TTS: Обнаружен суточный лимит Google (10 запросов/день). Прерываем повторные попытки.")
+            break
+        m_del = re.search(r'retryDelay["\']?:\s*["\']?(\d+)s', err_str)
+        if m_del and int(m_del.group(1)) > 120:
+            logger.warning(f"Gemini TTS: Обнаружено время ожидания квоты {m_del.group(1)}с (> 2 мин). Прерываем повторные попытки.")
+            break
+
         # If round finished due to temporary RPM limit across all keys, wait 25s for the 60s window to roll over
         if round_idx < 2 and last_err and ("429" in str(last_err) or "RESOURCE_EXHAUSTED" in str(last_err)):
             wait_sec = 25
@@ -618,8 +666,13 @@ async def _synthesize_gemini_single_chunk(text: str, voice_name: str, max_retrie
                 for m in GEMINI_TTS_MODELS:
                     _GEMINI_COOLDOWNS.pop((k, m), None)
 
-    logger.error(f"Gemini TTS failed after testing available keys: {last_err}")
-    raise RuntimeError(f"Все доступные ключи Gemini исчерпали квоту (429). Дождитесь минутного/суточного сброса квоты Google или добавьте новые ключи.")
+    seconds_left, reset_time_str = calculate_gemini_reset_time(last_err)
+    logger.error(f"Gemini TTS failed after testing available keys: {last_err}. До сброса суточной квоты: {reset_time_str}")
+    raise GeminiTTSQuotaExhaustedError(
+        f"Все доступные ключи Gemini исчерпали квоту (429). До сброса лимита: {reset_time_str}.",
+        seconds_left=seconds_left,
+        reset_time_str=reset_time_str,
+    )
 
 
 async def _synthesize_gemini_speech(
@@ -824,28 +877,14 @@ async def generate_segmented_speech(
             gemini_voice = "Charon"
         else:
             gemini_voice = gemini_voice.capitalize()
-        try:
-            return await _synthesize_gemini_speech(
-                segments=segments,
-                voice_name=gemini_voice,
-                output_dir=output_dir,
-                lang=lang,
-                full_text=full_text,
-                progress_callback=progress_callback,
-            )
-        except Exception as e:
-            err_msg = str(e)
-            if "исчерпали квоту" in err_msg or "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
-                fallback_voice = config.TTS_VOICES.get(lang, "de-DE-ConradNeural" if lang == "de" else "ru-RU-DmitryNeural")
-                logger.warning(
-                    f"⚠️ Суточный лимит Google Gemini TTS исчерпан (10 запросов/день на Free-аккаунтах). "
-                    f"Выполняем безопасное автопереключение на Microsoft Neural ({fallback_voice}), чтобы завершить ролик без ошибок!"
-                )
-                if progress_callback:
-                    progress_callback(5, f"Квота Gemini исчерпана -> Озвучка через {fallback_voice}...")
-                voice = fallback_voice
-            else:
-                raise
+        return await _synthesize_gemini_speech(
+            segments=segments,
+            voice_name=gemini_voice,
+            output_dir=output_dir,
+            lang=lang,
+            full_text=full_text,
+            progress_callback=progress_callback,
+        )
     
     if not full_text:
         full_text = "\n\n".join(segments)

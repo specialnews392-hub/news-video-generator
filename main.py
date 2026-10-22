@@ -72,8 +72,11 @@ def _load_jobs() -> dict[str, dict]:
                             j["result"]["title_ru"] = t_ru
                         if h_ru and not j["result"].get("thumbnail_hook_ru"):
                             j["result"]["thumbnail_hook_ru"] = h_ru
+                    # If job was waiting for TTS reset when server shut down, keep it in awaiting_tts_choice
+                    if j.get("status") == "waiting_tts_reset":
+                        j["status"] = "awaiting_tts_choice"
                     # If job was running/queued when server shut down, mark as interrupted so UI can offer resume
-                    if j.get("status") in ("running", "queued"):
+                    elif j.get("status") in ("running", "queued"):
                         j["status"] = "failed"
                         if not j.get("error"):
                             j["error"] = "Генерация была прервана перезапуском сервера"
@@ -127,6 +130,10 @@ PIPELINE_SEMAPHORE = asyncio.Semaphore(1)
 
 # Review slide events map for jobs awaiting manual slide approval
 _SLIDE_REVIEW_EVENTS: dict[str, asyncio.Event] = {}
+
+# TTS quota choice events map for jobs awaiting user decision on quota exhaustion
+_TTS_CHOICE_EVENTS: dict[str, asyncio.Event] = {}
+_TTS_CHOICE_ACTIONS: dict[str, dict] = {}
 
 # Active pipeline asyncio tasks map for instant cancellation
 _RUNNING_TASKS: dict[str, asyncio.Task] = {}
@@ -427,6 +434,11 @@ async def cancel_job(job_id: str):
         _SLIDE_REVIEW_EVENTS[job_id].set()
         _SLIDE_REVIEW_EVENTS.pop(job_id, None)
 
+    if job_id in _TTS_CHOICE_EVENTS:
+        _TTS_CHOICE_EVENTS[job_id].set()
+        _TTS_CHOICE_EVENTS.pop(job_id, None)
+    _TTS_CHOICE_ACTIONS.pop(job_id, None)
+
     # Cancel the asyncio pipeline task immediately
     if job_id in _RUNNING_TASKS:
         t = _RUNNING_TASKS.pop(job_id, None)
@@ -497,14 +509,18 @@ async def reset_all_running_jobs():
 
     # 2. Mark any active/queued jobs as cancelled
     for jid, j in jobs.items():
-        if j.get("status") in ("running", "queued", "awaiting_slide_review"):
+        if j.get("status") in ("running", "queued", "awaiting_slide_review", "awaiting_tts_choice", "waiting_tts_reset"):
             j["status"] = "cancelled"
             j["current_step"] = "Отменено пользователем"
             j["detail"] = "Сброшено пользователем"
             cancelled.append(jid)
             if jid in _SLIDE_REVIEW_EVENTS:
                 _SLIDE_REVIEW_EVENTS[jid].set()
+            if jid in _TTS_CHOICE_EVENTS:
+                _TTS_CHOICE_EVENTS[jid].set()
     _SLIDE_REVIEW_EVENTS.clear()
+    _TTS_CHOICE_EVENTS.clear()
+    _TTS_CHOICE_ACTIONS.clear()
 
     # 3. Reset pipeline semaphore so next job starts immediately without waiting
     PIPELINE_SEMAPHORE = asyncio.Semaphore(1)
@@ -1599,6 +1615,40 @@ async def approve_slides(job_id: str):
     return {"status": "ok", "message": "Сборка видео возобновляется из сохраненных материалов"}
 
 
+class TTSChoiceRequest(BaseModel):
+    action: str  # "switch_to_edge" or "wait"
+    voice_id: Optional[str] = None
+
+
+@app.post("/api/job/{job_id}/tts-choice")
+async def choose_tts_action(job_id: str, req: TTSChoiceRequest):
+    """Handle user's decision when Google Gemini TTS quota is exhausted."""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[job_id]
+
+    ev = _TTS_CHOICE_EVENTS.get(job_id)
+    if ev:
+        _TTS_CHOICE_ACTIONS[job_id] = {"action": req.action, "voice_id": req.voice_id}
+        ev.set()
+        logger.info(f"[{job_id}] User chose TTS action '{req.action}'. Signalled in-memory pipeline event.")
+        return {"status": "ok", "action": req.action, "message": "Выбор принят, процесс продолжается"}
+
+    # If the process was interrupted/reloaded, resume the job via retry_job with the chosen voice!
+    if req.action == "switch_to_edge":
+        fallback_voice_id = req.voice_id or (job.get("tts_quota_info") or {}).get("fallback_voice_id")
+        if not fallback_voice_id:
+            fallback_voice_id = "de-conrad" if job.get("language") == "de" else "ru-dmitry"
+        job["voice_id"] = fallback_voice_id
+        job["status"] = "queued"
+        job["tts_quota_info"] = None
+        _save_jobs()
+        logger.info(f"[{job_id}] Process was reloaded; resuming job with Microsoft Neural voice '{fallback_voice_id}'.")
+        return await retry_job(job_id)
+
+    return {"status": "ok", "action": req.action}
+
+
 class AcuteSelectRequest(BaseModel):
     angle_id: str
     topic_query: str = ""
@@ -1949,24 +1999,128 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
             _refresh_parallel_progress()
             logger.info(f"[{job['id']}] {msg}")
         
-        tts_result, image_paths = await asyncio.gather(
-            tts_engine.generate_segmented_speech(
-                segments=script_data["segments"],
-                output_dir=temp_dir / "audio",
-                lang=req.language,
-                voice=voice,
-                rate=req.voice_rate,
-                full_text=script_data["script"],
-                progress_callback=tts_progress,
-            ),
+        # Start image search and download in background task so image progress is preserved
+        img_download_task = asyncio.create_task(
             image_searcher.search_and_download_images(
                 queries=search_queries[:num_segments],
                 output_dir=temp_dir / "images",
                 progress_callback=img_progress,
                 topic=req.topic,
                 title=script_data.get("title", ""),
-            ),
+            )
         )
+
+        current_voice = voice
+        while True:
+            _check_cancelled()
+            try:
+                tts_result = await tts_engine.generate_segmented_speech(
+                    segments=script_data["segments"],
+                    output_dir=temp_dir / "audio",
+                    lang=req.language,
+                    voice=current_voice,
+                    rate=req.voice_rate,
+                    full_text=script_data["script"],
+                    progress_callback=tts_progress,
+                )
+                break
+            except tts_engine.GeminiTTSQuotaExhaustedError as quota_err:
+                fallback_edge_voice = config.TTS_VOICES.get(req.language, "de-DE-ConradNeural" if req.language == "de" else "ru-RU-DmitryNeural")
+                fallback_voice_info = next((v for v in config.ALL_VOICES if v.get("edge") == fallback_edge_voice), None)
+                fallback_voice_name = fallback_voice_info["name"] if fallback_voice_info else fallback_edge_voice
+                fallback_voice_id = fallback_voice_info["id"] if fallback_voice_info else ("de-conrad" if req.language == "de" else "ru-dmitry")
+
+                job["status"] = "awaiting_tts_choice"
+                job["tts_quota_info"] = {
+                    "seconds_left": quota_err.seconds_left,
+                    "reset_time_str": quota_err.reset_time_str,
+                    "reset_utc": "00:00 UTC",
+                    "fallback_voice_id": fallback_voice_id,
+                    "fallback_voice_name": fallback_voice_name,
+                    "fallback_edge_voice": fallback_edge_voice,
+                    "current_voice": current_voice,
+                }
+                job["current_step"] = f"Лимит квоты Google исчерпан. Ожидание выбора: Microsoft или ждать {quota_err.reset_time_str}"
+                job["detail"] = f"До сброса квоты Google осталось {quota_err.reset_time_str} (00:00 UTC). Выберите действие."
+                _save_jobs()
+
+                choice_ev = asyncio.Event()
+                _TTS_CHOICE_EVENTS[job_id] = choice_ev
+                _TTS_CHOICE_ACTIONS[job_id] = {}
+                logger.info(f"[{job_id}] ⏸️ Лимит Gemini TTS исчерпан. Ожидание выбора пользователя (Microsoft Neural или ждать {quota_err.reset_time_str})...")
+
+                try:
+                    await choice_ev.wait()
+                finally:
+                    _TTS_CHOICE_EVENTS.pop(job_id, None)
+
+                _check_cancelled()
+                user_choice = _TTS_CHOICE_ACTIONS.pop(job_id, {})
+                action = user_choice.get("action", "switch_to_edge")
+
+                if action == "switch_to_edge":
+                    chosen_vid = user_choice.get("voice_id") or fallback_voice_id
+                    v_info = config.VOICES_BY_ID.get(chosen_vid)
+                    chosen_edge = v_info.get("edge", fallback_edge_voice) if v_info else fallback_edge_voice
+                    chosen_name = v_info["name"] if v_info else fallback_voice_name
+
+                    logger.info(f"[{job_id}] 🎙️ Пользователь выбрал переозвучку через Microsoft Neural: {chosen_edge}")
+                    current_voice = chosen_edge
+                    job["voice_id"] = chosen_vid
+                    job["status"] = "running"
+                    job["tts_quota_info"] = None
+                    job["current_step"] = f"Озвучка с начала через Microsoft Neural ({chosen_name})..."
+                    job["detail"] = f"Синтез речи через Microsoft Neural ({chosen_edge})..."
+                    _save_jobs()
+                    continue
+                elif action == "wait":
+                    logger.info(f"[{job_id}] ⏳ Пользователь выбрал ожидание сброса квоты Google...")
+                    job["status"] = "waiting_tts_reset"
+                    job["current_step"] = f"Ожидание сброса суточного лимита Google..."
+                    _save_jobs()
+
+                    wait_until = time.time() + quota_err.seconds_left
+                    while time.time() < wait_until:
+                        _check_cancelled()
+                        interrupted_ev = _TTS_CHOICE_EVENTS.get(job_id)
+                        if not interrupted_ev:
+                            interrupted_ev = asyncio.Event()
+                            _TTS_CHOICE_EVENTS[job_id] = interrupted_ev
+
+                        rem = max(0, int(wait_until - time.time()))
+                        hrs = rem // 3600
+                        mins = (rem % 3600) // 60
+                        rem_str = f"{hrs} ч {mins:02d} мин" if hrs > 0 else f"{mins} мин"
+                        if job.get("tts_quota_info"):
+                            job["tts_quota_info"]["seconds_left"] = rem
+                            job["tts_quota_info"]["reset_time_str"] = rem_str
+                        job["detail"] = f"Ожидание сброса квоты Google: осталось {rem_str} (00:00 UTC). Можно переключить на Microsoft."
+                        _save_jobs()
+
+                        try:
+                            await asyncio.wait_for(interrupted_ev.wait(), timeout=10.0)
+                            user_choice = _TTS_CHOICE_ACTIONS.pop(job_id, {})
+                            if user_choice.get("action") == "switch_to_edge":
+                                chosen_vid = user_choice.get("voice_id") or fallback_voice_id
+                                v_info = config.VOICES_BY_ID.get(chosen_vid)
+                                current_voice = v_info.get("edge", fallback_edge_voice) if v_info else fallback_edge_voice
+                                job["voice_id"] = chosen_vid
+                                job["status"] = "running"
+                                job["tts_quota_info"] = None
+                                _save_jobs()
+                                break
+                        except asyncio.TimeoutError:
+                            pass
+
+                    if current_voice.startswith("de-DE-") or current_voice.startswith("ru-RU-") or "Neural" in current_voice:
+                        continue
+                    
+                    job["status"] = "running"
+                    job["current_step"] = "Квота Google сброшена. Повторная попытка Gemini TTS..."
+                    _save_jobs()
+                    continue
+
+        image_paths = await img_download_task
         
         tts_engine_name = tts_result.get("engine", "unknown")
         downloaded_count = sum(1 for p in image_paths if p)

@@ -3426,5 +3426,218 @@ input[type="range"]::-webkit-slider-thumb:hover {
     transform: scale(1.04);
 }
 
+/* === TTS Quota Choice Banner === */
+.tts-quota-banner {
+    position: relative;
+    background: linear-gradient(135deg, rgba(28, 25, 45, 0.98), rgba(45, 25, 30, 0.98));
+    border: 1px solid rgba(239, 68, 68, 0.5);
+    border-radius: 14px;
+    padding: 22px 26px;
+    margin: 18px 0;
+    box-shadow: 0 10px 35px rgba(239, 68, 68, 0.2);
+    overflow: hidden;
+    animation: pulseBorderTTS 3s infinite ease-in-out;
+}
+
+@keyframes pulseBorderTTS {
+    0%, 100% { border-color: rgba(239, 68, 68, 0.45); box-shadow: 0 10px 35px rgba(239, 68, 68, 0.15); }
+    50% { border-color: rgba(245, 158, 11, 0.85); box-shadow: 0 10px 40px rgba(245, 158, 11, 0.35); }
+}
+
+.tts-quota-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid rgba(239, 68, 68, 0.5);
+    color: #fca5a5;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 4px 14px;
+    border-radius: 999px;
+    margin-bottom: 10px;
+}
+
+.tts-quota-pulse {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ef4444;
+    box-shadow: 0 0 10px #ef4444;
+    animation: blink 1.4s infinite;
+}
+
+.tts-quota-title {
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: #fff;
+    margin: 4px 0 8px 0;
+}
+
+.tts-quota-desc {
+    color: var(--text-secondary, #94a3b8);
+    font-size: 0.95rem;
+    line-height: 1.6;
+    margin: 0 0 18px 0;
+}
+
+.tts-timer-highlight {
+    color: #f59e0b;
+    font-size: 1.05rem;
+    font-weight: 700;
+    background: rgba(245, 158, 11, 0.15);
+    padding: 2px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.tts-quota-options {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.tts-choice-card {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 20px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    border: 1px solid transparent;
+}
+
+.tts-choice-card.primary-choice {
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.9));
+    border-color: rgba(99, 102, 241, 0.4);
+}
+
+.tts-choice-card.primary-choice:hover {
+    background: linear-gradient(135deg, rgba(49, 46, 129, 0.9), rgba(30, 27, 75, 0.95));
+    border-color: rgba(129, 140, 248, 0.8);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(99, 102, 241, 0.3);
+}
+
+.tts-choice-card.secondary-choice {
+    background: rgba(30, 41, 59, 0.5);
+    border-color: rgba(148, 163, 184, 0.2);
+}
+
+.tts-choice-card.secondary-choice:hover {
+    background: rgba(51, 65, 85, 0.7);
+    border-color: rgba(245, 158, 11, 0.5);
+    transform: translateY(-2px);
+}
+
+.tts-choice-icon {
+    font-size: 2rem;
+    flex-shrink: 0;
+}
+
+.tts-choice-info {
+    flex: 1;
+}
+
+.tts-choice-heading {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 4px;
+}
+
+.tts-choice-sub {
+    font-size: 0.88rem;
+    color: #94a3b8;
+    line-height: 1.4;
+}
+
+.tts-choice-sub b {
+    color: #38bdf8;
+}
+
+.btn-tts-choice {
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    border: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.btn-tts-choice.primary {
+    background: linear-gradient(135deg, #6366f1, #4f46e5);
+    color: #fff;
+    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+}
+
+.btn-tts-choice.primary:hover {
+    background: linear-gradient(135deg, #4f46e5, #4338ca);
+    transform: scale(1.03);
+}
+
+.btn-tts-choice.secondary {
+    background: rgba(71, 85, 105, 0.6);
+    color: #cbd5e1;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.btn-tts-choice.secondary:hover {
+    background: rgba(100, 116, 139, 0.8);
+    color: #fff;
+}
+
+.tts-waiting-status {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-top: 10px;
+}
+
+.tts-waiting-box {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    border-radius: 10px;
+    padding: 16px;
+}
+
+.tts-waiting-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(245, 158, 11, 0.2);
+    border-top-color: #f59e0b;
+    border-radius: 50%;
+    animation: spin 1s infinite linear;
+    flex-shrink: 0;
+}
+
+.tts-waiting-title {
+    font-weight: 600;
+    color: #fff;
+    font-size: 1rem;
+}
+
+.tts-waiting-countdown {
+    color: #f59e0b;
+    font-weight: 700;
+    font-size: 1.1rem;
+    margin: 4px 0;
+}
+
+.tts-waiting-note {
+    font-size: 0.85rem;
+    color: #94a3b8;
+}
+
 
 

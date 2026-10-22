@@ -357,6 +357,10 @@ async function checkStatus() {
             setStatus('error', 'Ошибка');
         } else if (job.status === 'awaiting_slide_review') {
             setStatus('busy', '⏸️ Ожидание проверки слайдов');
+        } else if (job.status === 'awaiting_tts_choice') {
+            setStatus('busy', '⚠️ Ожидание выбора озвучки (Google лимит)');
+        } else if (job.status === 'waiting_tts_reset') {
+            setStatus('busy', '⏳ Ожидание сброса квоты Google');
         }
     } catch (error) {
         console.error('Poll error:', error);
@@ -551,6 +555,40 @@ function updateProgress(job) {
     } else {
         if (slideBanner) {
             slideBanner.style.display = 'none';
+        }
+    }
+
+    // TTS Quota Choice Banner
+    const ttsBanner = document.getElementById('ttsQuotaBanner');
+    const ttsTimer = document.getElementById('ttsQuotaResetTimer');
+    const ttsWaitingTimer = document.getElementById('ttsWaitingTimer');
+    const ttsFallbackVoiceName = document.getElementById('ttsFallbackVoiceName');
+    const ttsOpts = document.getElementById('ttsQuotaOptions');
+    const ttsWaitStatus = document.getElementById('ttsWaitingStatus');
+
+    if (job.status === 'awaiting_tts_choice' || job.status === 'waiting_tts_reset') {
+        currentJobId = job.id;
+        if (ttsBanner) {
+            ttsBanner.style.display = 'block';
+            const qInfo = job.tts_quota_info || {};
+            const timeStr = qInfo.reset_time_str || '-- ч -- мин';
+            if (ttsTimer) ttsTimer.textContent = timeStr;
+            if (ttsWaitingTimer) ttsWaitingTimer.textContent = timeStr;
+            if (ttsFallbackVoiceName && qInfo.fallback_voice_name) {
+                ttsFallbackVoiceName.textContent = qInfo.fallback_voice_name;
+            }
+
+            if (job.status === 'waiting_tts_reset') {
+                if (ttsOpts) ttsOpts.style.display = 'none';
+                if (ttsWaitStatus) ttsWaitStatus.style.display = 'flex';
+            } else {
+                if (ttsOpts) ttsOpts.style.display = 'flex';
+                if (ttsWaitStatus) ttsWaitStatus.style.display = 'none';
+            }
+        }
+    } else {
+        if (ttsBanner) {
+            ttsBanner.style.display = 'none';
         }
     }
 }
@@ -908,11 +946,15 @@ async function loadHistory() {
                     currentJobId = job.id;
                     currentJobData = job;
 
-                    if (job.status === 'running' || job.status === 'queued' || job.status === 'awaiting_slide_review') {
+                    if (job.status === 'running' || job.status === 'queued' || job.status === 'awaiting_slide_review' || job.status === 'awaiting_tts_choice' || job.status === 'waiting_tts_reset') {
                         document.getElementById('jobTopic').textContent = job.topic || '';
                         showPanel('progress');
                         if (job.status === 'awaiting_slide_review') {
                             setStatus('busy', '⏸️ Ожидание проверки слайдов');
+                        } else if (job.status === 'awaiting_tts_choice') {
+                            setStatus('busy', '⚠️ Ожидание выбора озвучки');
+                        } else if (job.status === 'waiting_tts_reset') {
+                            setStatus('busy', '⏳ Ожидание сброса квоты Google');
                         } else {
                             setStatus('busy', 'Генерация...');
                         }
@@ -2644,6 +2686,44 @@ async function approveAndCompileVideo() {
 
 async function approveSlidesDirect() {
     await approveAndCompileVideo();
+}
+
+async function chooseTTSAction(action) {
+    if (!currentJobId) return;
+    try {
+        const btns = document.querySelectorAll('.btn-tts-choice');
+        btns.forEach(b => b.disabled = true);
+
+        const resp = await fetch(`/api/job/${currentJobId}/tts-choice`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: action })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            alert(data.detail || 'Не удалось отправить выбор');
+            btns.forEach(b => b.disabled = false);
+            return;
+        }
+
+        if (action === 'switch_to_edge') {
+            const banner = document.getElementById('ttsQuotaBanner');
+            if (banner) banner.style.display = 'none';
+            setStatus('busy', '🎙️ Озвучка через Microsoft Neural...');
+        } else if (action === 'wait') {
+            const opts = document.getElementById('ttsQuotaOptions');
+            const waitStatus = document.getElementById('ttsWaitingStatus');
+            if (opts) opts.style.display = 'none';
+            if (waitStatus) waitStatus.style.display = 'flex';
+            setStatus('busy', '⏳ Ожидание сброса лимита Google...');
+        }
+    } catch (e) {
+        console.error('TTS choice error:', e);
+        alert('Ошибка при отправке выбора: ' + e.message);
+    } finally {
+        const btns = document.querySelectorAll('.btn-tts-choice');
+        btns.forEach(b => b.disabled = false);
+    }
 }
 
 // === Acute Topics Modal ===
