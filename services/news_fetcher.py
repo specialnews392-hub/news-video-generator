@@ -1656,17 +1656,18 @@ async def get_acute_topics_preview(
 
     # For unmatched catalog angles, search Google News strictly with when:3d and bounded concurrency
     if unmatched_catalog:
-        sem = asyncio.Semaphore(5)
+        sem = asyncio.Semaphore(8)
         async def _fetch_angle_fresh_news(ang: dict, client: httpx.AsyncClient) -> tuple[dict, dict | None]:
             queries = ang.get("queries", [])
             base_q = queries[0] if queries else ang.get("title", "")
-            words = [w for w in base_q.split() if len(w) > 3][:4]
-            search_q = " ".join(words)
+            # Use 1-2 significant words so Google News returns live breaking news with dates
+            words = [w for w in re.findall(r'[a-zA-ZäöüßА-Яа-яё0-9]{4,}', base_q) if w.lower() not in {"deutschland", "aktuell", "zahlen", "politik", "berlin", "immer"}][:2]
+            search_q = " ".join(words) if words else base_q.split()[0]
             full_q = f"{search_q} when:3d".strip()
             url = f"https://news.google.com/rss/search?q={quote_plus(full_q)}&hl={lang}&gl=DE&ceid=DE:{lang}"
             async with sem:
                 try:
-                    resp = await client.get(url)
+                    resp = await client.get(url, timeout=7.0)
                     if resp.status_code == 200:
                         feed = feedparser.parse(resp.text)
                         for e in feed.entries[:3]:
@@ -1685,7 +1686,7 @@ async def get_acute_topics_preview(
             return ang, None
 
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        async with httpx.AsyncClient(timeout=4.5, headers=headers) as client:
+        async with httpx.AsyncClient(timeout=12.0, headers=headers) as client:
             online_tasks = [_fetch_angle_fresh_news(ang, client) for ang in unmatched_catalog]
             online_results = await asyncio.gather(*online_tasks, return_exceptions=True)
             for res in online_results:
