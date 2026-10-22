@@ -20,11 +20,11 @@ for d in [OUTPUT_DIR, TEMP_DIR, FONTS_DIR, STATIC_DIR]:
 GEMINI_KEYS_FILE = BASE_DIR / "gemini_keys.txt"
 
 def load_gemini_keys() -> list[str]:
-    """Load all Gemini API keys from file."""
+    """Load all Gemini API keys from file, ignoring comments and blank lines."""
     if not GEMINI_KEYS_FILE.exists():
         return []
-    with open(GEMINI_KEYS_FILE, "r") as f:
-        return [line.strip() for line in f if line.strip()]
+    with open(GEMINI_KEYS_FILE, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
 
 GEMINI_KEYS = load_gemini_keys()
 _key_index = 0
