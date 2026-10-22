@@ -418,6 +418,7 @@ _GEMINI_COOLDOWNS: dict[tuple[str, str], float] = {}
 COOLDOWN_DURATION_SEC = 300  # 5 minutes runtime cooldown for key+model pair on 429
 
 GEMINI_TTS_MODELS = [
+    "gemini-3.1-flash-tts-preview",
     "gemini-3.8-flash-tts",
     "gemini-3.8-flash-lite-tts",
 ]
@@ -443,11 +444,12 @@ async def check_gemini_tts_status() -> dict:
         )
     )
 
+    test_keys = config.GEMINI_KEYS[:5] if config.GEMINI_KEYS else []
+
     for m in GEMINI_TTS_MODELS:
         success = False
         err_msg = ""
-        for _ in range(2):
-            key = config.get_random_gemini_key()
+        for key in test_keys:
             try:
                 http_opts = types.HttpOptions(base_url=config.GEMINI_BASE_URL) if getattr(config, "GEMINI_BASE_URL", None) else None
                 client = genai.Client(api_key=key, http_options=http_opts)
@@ -577,9 +579,15 @@ async def _synthesize_gemini_single_chunk(text: str, voice_name: str, max_retrie
             err_str = str(e)
             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                 _GEMINI_COOLDOWNS[(key, model_name)] = time.time() + COOLDOWN_DURATION_SEC
+                
+                # If key has quota_limit_value: 0 (permanently zero regional quota), never sleep, skip immediately!
+                if "quota_limit_value': '0'" in err_str or "quota_limit_value\": \"0\"" in err_str:
+                    logger.warning(f"Gemini TTS: key ...{key[-6:]} has 0 regional quota (europe-west1: 0). Skipping immediately.")
+                    continue
+
                 logger.warning(f"Gemini TTS 429 on model {model_name} (key ...{key[-6:]}). In-memory cooldown {COOLDOWN_DURATION_SEC}s.")
                 if attempt >= 2:
-                    wait_sec = min(30, 8 + (attempt - 2) * 5)
+                    wait_sec = min(20, 5 + (attempt - 2) * 3)
                     logger.warning(f"Project RPM limit reached for Gemini TTS keys. Pausing {wait_sec}s for the 1-minute quota window to roll over...")
                     await asyncio.sleep(wait_sec)
                 else:
