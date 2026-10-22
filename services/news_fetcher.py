@@ -1622,6 +1622,13 @@ async def get_acute_topics_preview(
         return list(tokens)
 
     available_catalog = [ang for ang in cat_info["sub_angles"] if ang["id"] not in all_excluded]
+    if not available_catalog:
+        # All catalog angles have been used in previous runs.
+        # Recycle catalog angles so the user is NEVER left with an empty screen with 0 items:
+        logger.info(f"All catalog angles for '{cat_id}' are in history. Recycling catalog angles for new cycle.")
+        available_catalog = list(cat_info["sub_angles"])
+        all_excluded = set()
+
     fresh_cards_pool = []
     used_live_articles = set()
 

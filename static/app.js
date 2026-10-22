@@ -638,6 +638,47 @@ function showError(message) {
     setStatus('error', 'Ошибка');
 }
 
+// === Job Retry & Resume from Cache ===
+async function retryCurrentJob(jobId) {
+    const targetId = jobId || currentJobId || localStorage.getItem('active_news_job_id');
+    if (!targetId) {
+        alert('Идентификатор задачи не найден');
+        return;
+    }
+
+    try {
+        setStatus('busy', 'Возобновление задачи (из кэша)...');
+        const resp = await fetch(`/api/job/${targetId}/retry`, { method: 'POST' });
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.detail || 'Не удалось возобновить задачу');
+        }
+        currentJobId = targetId;
+        localStorage.setItem('active_news_job_id', currentJobId);
+        dismissInterruptedJob();
+        showPanel('progress');
+        startPolling();
+    } catch (e) {
+        alert('Ошибка при возобновлении: ' + e.message);
+        setStatus('ready', 'Готов к работе');
+    }
+}
+
+function resumeInterruptedJob() {
+    if (window._interruptedJobId) {
+        retryCurrentJob(window._interruptedJobId);
+    } else {
+        retryCurrentJob();
+    }
+}
+
+function dismissInterruptedJob() {
+    const banner = document.getElementById('interruptedJobBanner');
+    if (banner) banner.style.display = 'none';
+    localStorage.removeItem('active_news_job_id');
+    window._interruptedJobId = null;
+}
+
 // === Panel Management ===
 function showPanel(name) {
     generatorPanel.style.display = name === 'generator' ? 'block' : 'none';
@@ -881,7 +922,16 @@ async function loadHistory() {
                         showResults(job);
                         setStatus('ready', 'Готов к работе');
                     } else if (job.status === 'failed' || job.status === 'cancelled') {
-                        localStorage.removeItem('active_news_job_id');
+                        // Show banner to allow resuming from cached script and audio chunks!
+                        const banner = document.getElementById('interruptedJobBanner');
+                        const bannerText = document.getElementById('interruptedJobText');
+                        if (banner && bannerText) {
+                            const stepText = job.current_step || 'Прервано';
+                            const prog = job.progress || 0;
+                            bannerText.textContent = `Тема: «${job.topic || 'Без темы'}» · Прервано на шаге: ${stepText} (${prog}%)`;
+                            banner.style.display = 'block';
+                            window._interruptedJobId = job.id;
+                        }
                     }
                 } else {
                     localStorage.removeItem('active_news_job_id');

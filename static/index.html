@@ -60,9 +60,26 @@
         <main class="main-content">
             <!-- Generator Panel -->
             <section class="panel generator-panel" id="generatorPanel">
-                <div class="panel-header">
-                    <h2>🎬 Новый ролик</h2>
-                    <p class="panel-description">Укажите тему и параметры для генерации</p>
+                <!-- Interrupted Job Banner -->
+                <div id="interruptedJobBanner" style="display: none; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 12px; padding: 16px 20px; margin-bottom: 24px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+                        <div>
+                            <div style="font-weight: 700; color: #f59e0b; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
+                                <span>⚠️</span> <span>Предыдущая генерация была прервана</span>
+                            </div>
+                            <div id="interruptedJobText" style="font-size: 13px; color: var(--text-secondary);">
+                                Тема: ...
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <button type="button" class="btn btn-primary" onclick="resumeInterruptedJob()" style="background: linear-gradient(135deg, #10b981, #059669); color: #fff; padding: 8px 18px; border-radius: 8px; font-weight: 600; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;">
+                                <span>🔄</span> Продолжить с того же места
+                            </button>
+                            <button type="button" class="btn btn-secondary" onclick="dismissInterruptedJob()" style="padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text-muted); cursor: pointer;">
+                                ✕ Закрыть
+                            </button>
+                        </div>
+                    </div>
                 </div>
                 
                 <div class="form-grid">
@@ -515,7 +532,12 @@
                     <h2>❌ Ошибка</h2>
                 </div>
                 <div class="error-message" id="errorMessage"></div>
-                <button class="btn-new" onclick="resetGenerator()">Попробовать снова</button>
+                <div style="display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap;">
+                    <button type="button" class="btn btn-primary" id="btnResumeFailedJob" onclick="retryCurrentJob()" style="background: linear-gradient(135deg, #10b981, #059669); color: #fff; font-weight: 600; padding: 12px 24px; border-radius: 8px; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 8px;">
+                        <span>🔄</span> Продолжить с сохранённого места
+                    </button>
+                    <button type="button" class="btn-new" onclick="resetGenerator()" style="margin-top: 0;">Начать заново</button>
+                </div>
             </section>
 
             <!-- History Panel -->

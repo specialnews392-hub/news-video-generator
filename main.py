@@ -72,6 +72,12 @@ def _load_jobs() -> dict[str, dict]:
                             j["result"]["title_ru"] = t_ru
                         if h_ru and not j["result"].get("thumbnail_hook_ru"):
                             j["result"]["thumbnail_hook_ru"] = h_ru
+                    # If job was running/queued when server shut down, mark as interrupted so UI can offer resume
+                    if j.get("status") in ("running", "queued"):
+                        j["status"] = "failed"
+                        if not j.get("error"):
+                            j["error"] = "Генерация была прервана перезапуском сервера"
+                        j["current_step"] = "Прервано (доступно возобновление)"
                 return data
         except Exception as e:
             logger.warning(f"Failed to load jobs state: {e}")
