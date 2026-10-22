@@ -180,5 +180,11 @@ THEME_COLORS = {
 GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://gemini-proxy.akot4400.workers.dev")
 GEMINI_MODEL = "gemini-3.5-flash-lite"  # Main model for script generation (higher daily limits)
 GEMINI_VISION_MODEL = "gemini-3.8-flash"  # Vision model for image analysis (fast & high capacity)
-GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
+GEMINI_FALLBACK_MODELS = [
+    "gemini-3.1-flash-lite-preview",
+    "gemini-flash-lite-latest",
+    "gemini-3.5-flash",
+    "gemini-3.8-flash",
+]
+
 

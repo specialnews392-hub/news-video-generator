@@ -265,8 +265,8 @@ ANTWORT STRENG IM JSON-FORMAT:
     total_keys = len(config.GEMINI_KEYS)
     
     for model_name in models_to_try:
-        # Try up to all keys for each model
-        keys_to_try = min(total_keys, 10)  # try up to 10 keys per model
+        # Try all available keys for each model
+        keys_to_try = total_keys
         for key_attempt in range(keys_to_try):
             try:
                 key = config.get_next_gemini_key()
@@ -424,6 +424,11 @@ ANTWORT STRENG IM JSON-FORMAT:
                 
                 # If rate limited or quota exceeded - backoff intelligently so 1-minute RPM window rolls over
                 if any(kw in error_str for kw in ["429", "quota", "rate", "resource_exhausted", "limit"]):
+                    # If this key has quota_limit_value: 0 (regional zero quota), sleeping does not help - skip immediately!
+                    if "quota_limit_value': '0'" in error_str or "quota_limit_value\": \"0\"" in error_str:
+                        logger.warning(f"Key has 0 regional quota (europe-west1: 0). Skipping immediately to next key.")
+                        continue
+                    
                     logger.warning(f"Key rate-limited (model={model_name}, attempt={key_attempt + 1}): {str(e)[:120]}")
                     if key_attempt < 2:
                         await asyncio.sleep(1.5)
@@ -433,6 +438,12 @@ ANTWORT STRENG IM JSON-FORMAT:
                         await asyncio.sleep(wait_sec)
                     continue
                 
+                # If model is experiencing temporary high demand (503)
+                if "503" in error_str or "unavailable" in error_str or "high demand" in error_str:
+                    logger.warning(f"Model {model_name} temporarily busy (503 high demand), trying next attempt/model: {str(e)[:120]}")
+                    await asyncio.sleep(1.5)
+                    continue
+
                 # If model not found - skip to next model
                 if "404" in error_str or "not_found" in error_str or "no longer available" in error_str:
                     logger.warning(f"Model {model_name} not available, trying next model")
