@@ -824,15 +824,28 @@ async def generate_segmented_speech(
             gemini_voice = "Charon"
         else:
             gemini_voice = gemini_voice.capitalize()
-        # STRICT: When Gemini voice is selected, generate STRICTLY via Gemini (NO silent fallback to Edge-TTS!)
-        return await _synthesize_gemini_speech(
-            segments=segments,
-            voice_name=gemini_voice,
-            output_dir=output_dir,
-            lang=lang,
-            full_text=full_text,
-            progress_callback=progress_callback,
-        )
+        try:
+            return await _synthesize_gemini_speech(
+                segments=segments,
+                voice_name=gemini_voice,
+                output_dir=output_dir,
+                lang=lang,
+                full_text=full_text,
+                progress_callback=progress_callback,
+            )
+        except Exception as e:
+            err_msg = str(e)
+            if "исчерпали квоту" in err_msg or "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
+                fallback_voice = config.TTS_VOICES.get(lang, "de-DE-ConradNeural" if lang == "de" else "ru-RU-DmitryNeural")
+                logger.warning(
+                    f"⚠️ Суточный лимит Google Gemini TTS исчерпан (10 запросов/день на Free-аккаунтах). "
+                    f"Выполняем безопасное автопереключение на Microsoft Neural ({fallback_voice}), чтобы завершить ролик без ошибок!"
+                )
+                if progress_callback:
+                    progress_callback(5, f"Квота Gemini исчерпана -> Озвучка через {fallback_voice}...")
+                voice = fallback_voice
+            else:
+                raise
     
     if not full_text:
         full_text = "\n\n".join(segments)

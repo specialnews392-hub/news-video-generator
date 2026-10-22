@@ -68,37 +68,34 @@ def get_image_proxy_worker() -> str:
 
 IMAGE_PROXY_WORKER_URL = get_image_proxy_worker()
 
-# === TTS Voices (Edge-TTS Neural voices) ===
+# === TTS Voices (Edge-TTS Neural voices & Gemini Experimental) ===
 # Each voice has: id, edge_name, display_name, lang, gender
 ALL_VOICES = [
-    # Russian
-    {"id": "ru-gemini-charon", "engine": "gemini", "gemini_voice": "Charon", "name": "Gemini Charon (AI)", "lang": "ru", "gender": "м"},
-    {"id": "ru-gemini-fenrir", "engine": "gemini", "gemini_voice": "Fenrir", "name": "Gemini Fenrir (AI)", "lang": "ru", "gender": "м"},
-    {"id": "ru-gemini-puck", "engine": "gemini", "gemini_voice": "Puck", "name": "Gemini Puck (AI)", "lang": "ru", "gender": "м"},
-    {"id": "ru-gemini-kore", "engine": "gemini", "gemini_voice": "Kore", "name": "Gemini Kore (AI)", "lang": "ru", "gender": "ж"},
-    {"id": "ru-dmitry", "edge": "ru-RU-DmitryNeural", "name": "Дмитрий", "lang": "ru", "gender": "м"},
-    {"id": "ru-svetlana", "edge": "ru-RU-SvetlanaNeural", "name": "Светлана", "lang": "ru", "gender": "ж"},
-    {"id": "ru-dariya", "edge": "ru-RU-DariyaNeural", "name": "Дария", "lang": "ru", "gender": "ж"},
-    # English
-    {"id": "en-gemini-charon", "engine": "gemini", "gemini_voice": "Charon", "name": "Gemini Charon (AI)", "lang": "en", "gender": "м"},
-    {"id": "en-gemini-fenrir", "engine": "gemini", "gemini_voice": "Fenrir", "name": "Gemini Fenrir (AI)", "lang": "en", "gender": "м"},
-    {"id": "en-gemini-puck", "engine": "gemini", "gemini_voice": "Puck", "name": "Gemini Puck (AI)", "lang": "en", "gender": "м"},
-    {"id": "en-gemini-kore", "engine": "gemini", "gemini_voice": "Kore", "name": "Gemini Kore (AI)", "lang": "en", "gender": "ж"},
-    {"id": "en-guy", "edge": "en-US-GuyNeural", "name": "Guy", "lang": "en", "gender": "м"},
-    {"id": "en-andrew", "edge": "en-US-AndrewNeural", "name": "Andrew", "lang": "en", "gender": "м"},
-    {"id": "en-brian", "edge": "en-US-BrianNeural", "name": "Brian", "lang": "en", "gender": "м"},
-    {"id": "en-jenny", "edge": "en-US-JennyNeural", "name": "Jenny", "lang": "en", "gender": "ж"},
-    {"id": "en-aria", "edge": "en-US-AriaNeural", "name": "Aria", "lang": "en", "gender": "ж"},
-    {"id": "en-davis", "edge": "en-US-DavisNeural", "name": "Davis", "lang": "en", "gender": "м"},
     # German
-    {"id": "de-gemini-charon", "engine": "gemini", "gemini_voice": "Charon", "name": "Gemini Charon (AI)", "lang": "de", "gender": "м"},
-    {"id": "de-gemini-fenrir", "engine": "gemini", "gemini_voice": "Fenrir", "name": "Gemini Fenrir (AI)", "lang": "de", "gender": "м"},
-    {"id": "de-gemini-puck", "engine": "gemini", "gemini_voice": "Puck", "name": "Gemini Puck (AI)", "lang": "de", "gender": "м"},
-    {"id": "de-gemini-kore", "engine": "gemini", "gemini_voice": "Kore", "name": "Gemini Kore (AI)", "lang": "de", "gender": "ж"},
-    {"id": "de-gemini-aoede", "engine": "gemini", "gemini_voice": "Aoede", "name": "Gemini Aoede (AI)", "lang": "de", "gender": "ж"},
-    {"id": "de-conrad", "edge": "de-DE-ConradNeural", "name": "Conrad", "lang": "de", "gender": "м"},
-    {"id": "de-killian", "edge": "de-DE-KillianNeural", "name": "Killian", "lang": "de", "gender": "м"},
-    {"id": "de-katja", "edge": "de-DE-KatjaNeural", "name": "Katja", "lang": "de", "gender": "ж"},
+    {"id": "de-conrad", "edge": "de-DE-ConradNeural", "name": "Conrad (Neural — Безлимитно ⭐)", "lang": "de", "gender": "м"},
+    {"id": "de-killian", "edge": "de-DE-KillianNeural", "name": "Killian (Neural — Безлимитно ⭐)", "lang": "de", "gender": "м"},
+    {"id": "de-katja", "edge": "de-DE-KatjaNeural", "name": "Katja (Neural — Безлимитно)", "lang": "de", "gender": "ж"},
+    {"id": "de-gemini-puck", "engine": "gemini", "gemini_voice": "Puck", "name": "Gemini Puck (Лимит Google: 10/сутки)", "lang": "de", "gender": "м"},
+    {"id": "de-gemini-charon", "engine": "gemini", "gemini_voice": "Charon", "name": "Gemini Charon (Лимит Google: 10/сутки)", "lang": "de", "gender": "м"},
+    {"id": "de-gemini-fenrir", "engine": "gemini", "gemini_voice": "Fenrir", "name": "Gemini Fenrir (Лимит Google: 10/сутки)", "lang": "de", "gender": "м"},
+    {"id": "de-gemini-kore", "engine": "gemini", "gemini_voice": "Kore", "name": "Gemini Kore (Лимит Google: 10/сутки)", "lang": "de", "gender": "ж"},
+    {"id": "de-gemini-aoede", "engine": "gemini", "gemini_voice": "Aoede", "name": "Gemini Aoede (Лимит Google: 10/сутки)", "lang": "de", "gender": "ж"},
+    # Russian
+    {"id": "ru-dmitry", "edge": "ru-RU-DmitryNeural", "name": "Дмитрий (Neural — Безлимитно ⭐)", "lang": "ru", "gender": "м"},
+    {"id": "ru-svetlana", "edge": "ru-RU-SvetlanaNeural", "name": "Светлана (Neural — Безлимитно)", "lang": "ru", "gender": "ж"},
+    {"id": "ru-dariya", "edge": "ru-RU-DariyaNeural", "name": "Дария (Neural — Безлимитно)", "lang": "ru", "gender": "ж"},
+    {"id": "ru-gemini-charon", "engine": "gemini", "gemini_voice": "Charon", "name": "Gemini Charon (Лимит Google: 10/сутки)", "lang": "ru", "gender": "м"},
+    {"id": "ru-gemini-fenrir", "engine": "gemini", "gemini_voice": "Fenrir", "name": "Gemini Fenrir (Лимит Google: 10/сутки)", "lang": "ru", "gender": "м"},
+    {"id": "ru-gemini-puck", "engine": "gemini", "gemini_voice": "Puck", "name": "Gemini Puck (Лимит Google: 10/сутки)", "lang": "ru", "gender": "м"},
+    {"id": "ru-gemini-kore", "engine": "gemini", "gemini_voice": "Kore", "name": "Gemini Kore (Лимит Google: 10/сутки)", "lang": "ru", "gender": "ж"},
+    # English
+    {"id": "en-guy", "edge": "en-US-GuyNeural", "name": "Guy (Neural — Безлимитно ⭐)", "lang": "en", "gender": "м"},
+    {"id": "en-andrew", "edge": "en-US-AndrewNeural", "name": "Andrew (Neural — Безлимитно)", "lang": "en", "gender": "м"},
+    {"id": "en-brian", "edge": "en-US-BrianNeural", "name": "Brian (Neural — Безлимитно)", "lang": "en", "gender": "м"},
+    {"id": "en-jenny", "edge": "en-US-JennyNeural", "name": "Jenny (Neural — Безлимитно)", "lang": "en", "gender": "ж"},
+    {"id": "en-aria", "edge": "en-US-AriaNeural", "name": "Aria (Neural — Безлимитно)", "lang": "en", "gender": "ж"},
+    {"id": "en-gemini-charon", "engine": "gemini", "gemini_voice": "Charon", "name": "Gemini Charon (Лимит Google: 10/сутки)", "lang": "en", "gender": "м"},
+    {"id": "en-gemini-puck", "engine": "gemini", "gemini_voice": "Puck", "name": "Gemini Puck (Лимит Google: 10/сутки)", "lang": "en", "gender": "м"},
     # French
     {"id": "fr-henri", "edge": "fr-FR-HenriNeural", "name": "Henri", "lang": "fr", "gender": "м"},
     {"id": "fr-denise", "edge": "fr-FR-DeniseNeural", "name": "Denise", "lang": "fr", "gender": "ж"},
