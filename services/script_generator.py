@@ -422,10 +422,15 @@ ANTWORT STRENG IM JSON-FORMAT:
                 error_str = str(e).lower()
                 last_error = e
                 
-                # If rate limited or quota exceeded - try next key immediately
+                # If rate limited or quota exceeded - backoff intelligently so 1-minute RPM window rolls over
                 if any(kw in error_str for kw in ["429", "quota", "rate", "resource_exhausted", "limit"]):
-                    logger.warning(f"Key exhausted (model={model_name}, attempt={key_attempt + 1}): {str(e)[:120]}")
-                    await asyncio.sleep(0.5)  # tiny pause then try next key
+                    logger.warning(f"Key rate-limited (model={model_name}, attempt={key_attempt + 1}): {str(e)[:120]}")
+                    if key_attempt < 2:
+                        await asyncio.sleep(1.5)
+                    else:
+                        wait_sec = min(30, 8 + (key_attempt - 2) * 8)
+                        logger.warning(f"Project RPM limit reached for project keys. Pausing {wait_sec}s for the 1-minute quota window to roll over...")
+                        await asyncio.sleep(wait_sec)
                     continue
                 
                 # If model not found - skip to next model

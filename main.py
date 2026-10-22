@@ -437,6 +437,43 @@ async def cancel_job(job_id: str):
     return {"status": "cancelled", "job_id": job_id}
 
 
+@app.post("/api/job/{job_id}/retry")
+async def retry_job(job_id: str):
+    """Retry a failed or cancelled job, reusing already generated script and cached audio chunks."""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[job_id]
+    
+    # Re-construct VideoRequest from saved job parameters
+    req = VideoRequest(
+        topic=job.get("topic", ""),
+        language=job.get("language", "ru"),
+        voice_id=job.get("voice_id", "ru-dmitry"),
+        theme=job.get("theme", "default"),
+        voice_rate=job.get("voice_rate", "+0%"),
+        target_length=job.get("target_length", 15000),
+        skip_image_analysis=job.get("skip_image_analysis", True),
+        ken_burns=job.get("ken_burns", False),
+        transitions=job.get("transitions", True),
+        review_slides=job.get("review_slides", False),
+    )
+    
+    is_busy = PIPELINE_SEMAPHORE.locked()
+    job["status"] = "queued"
+    job["progress"] = 0
+    job["error"] = None
+    job["current_step"] = "Возобновление задачи (из кэша)..." if not is_busy else "В очереди на возобновление..."
+    job["detail"] = "Будет использован сохраненный сценарий и готовые аудио-блоки"
+    _save_jobs()
+    
+    t = asyncio.create_task(run_pipeline(job_id, req))
+    _RUNNING_TASKS[job_id] = t
+    t.add_done_callback(lambda _, jid=job_id: _RUNNING_TASKS.pop(jid, None))
+    logger.info(f"[{job_id}] 🔄 Job retry initiated with disk cache preservation")
+    
+    return {"status": "queued", "job_id": job_id}
+
+
 @app.post("/api/jobs/reset")
 async def reset_all_running_jobs():
     """Cancel all active/running/queued jobs and release all pipeline locks immediately."""
@@ -1763,23 +1800,44 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
         
         # ====== STEP 2: Generate Script ======
         _check_cancelled()
-        _update_job(job, "running", 20, "Генерация уникального сценария (Gemini AI)...", "script_started",
-                    detail=f"Модель: {config.GEMINI_MODEL}, цель: {req.target_length} знаков")
         
-        recent_titles = news_fetcher.get_recent_video_titles(limit=6)
-        if recent_titles:
-            logger.info(f"Предыдущие заголовки для исключения повторов ({len(recent_titles)}): {recent_titles}")
-        
-        script_data = await script_generator.generate_script(
-            articles=articles,
-            topic=req.topic,
-            lang=req.language,
-            target_length=req.target_length,
-            previous_titles=recent_titles,
-        )
-        
-        # Save title to history immediately so future runs don't repeat it
-        news_fetcher.save_news_history([], [], new_video_title=script_data["title"])
+        script_cache_file = job_dir / "script_data.json"
+        script_data = None
+        if script_cache_file.exists():
+            try:
+                with open(script_cache_file, "r", encoding="utf-8") as f_sc:
+                    cached_sd = json.load(f_sc)
+                if cached_sd.get("segments") and cached_sd.get("title") and len(cached_sd.get("segments", [])) > 0:
+                    script_data = cached_sd
+                    logger.info(f"[{job_id}] ♻️ Повторное использование сценария из кэша ({len(script_data['segments'])} слайдов). Запрос к Gemini AI пропущен!")
+            except Exception as e:
+                logger.warning(f"Failed to read cached script_data.json: {e}")
+
+        if not script_data:
+            _update_job(job, "running", 20, "Генерация уникального сценария (Gemini AI)...", "script_started",
+                        detail=f"Модель: {config.GEMINI_MODEL}, цель: {req.target_length} знаков")
+            
+            recent_titles = news_fetcher.get_recent_video_titles(limit=6)
+            if recent_titles:
+                logger.info(f"Предыдущие заголовки для исключения повторов ({len(recent_titles)}): {recent_titles}")
+            
+            script_data = await script_generator.generate_script(
+                articles=articles,
+                topic=req.topic,
+                lang=req.language,
+                target_length=req.target_length,
+                previous_titles=recent_titles,
+            )
+            
+            # Save title to history immediately so future runs don't repeat it
+            news_fetcher.save_news_history([], [], new_video_title=script_data["title"])
+            
+            # Persist script_data to disk immediately for reuse on retry/resume
+            try:
+                with open(script_cache_file, "w", encoding="utf-8") as f_sc:
+                    json.dump(script_data, f_sc, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.warning(f"Failed to save script_data.json: {e}")
         
         main_lead = script_data.get("main_lead_story", "")
 

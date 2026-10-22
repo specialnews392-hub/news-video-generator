@@ -18,6 +18,7 @@ FILES = [
     "requirements.txt",
     "services/speech_aligner.py",
     "services/tts_engine.py",
+    "services/script_generator.py",
     "services/telegram_notifier.py",
     "services/thumbnail_generator.py",
     "main.py",

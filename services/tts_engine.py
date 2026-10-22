@@ -4,6 +4,8 @@ Chunked synthesis ensures 100% reliability with zero limits and exact subtitle s
 """
 import asyncio
 import io
+import hashlib
+import json
 import logging
 import os
 import re
@@ -576,12 +578,18 @@ async def _synthesize_gemini_single_chunk(text: str, voice_name: str, max_retrie
             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                 _GEMINI_COOLDOWNS[(key, model_name)] = time.time() + COOLDOWN_DURATION_SEC
                 logger.warning(f"Gemini TTS 429 on model {model_name} (key ...{key[-6:]}). In-memory cooldown {COOLDOWN_DURATION_SEC}s.")
+                if attempt >= 2:
+                    wait_sec = min(30, 8 + (attempt - 2) * 5)
+                    logger.warning(f"Project RPM limit reached for Gemini TTS keys. Pausing {wait_sec}s for the 1-minute quota window to roll over...")
+                    await asyncio.sleep(wait_sec)
+                else:
+                    await asyncio.sleep(1.0)
             else:
                 logger.warning(f"Gemini TTS attempt {attempt + 1} (model {model_name}) failed: {e}")
-            await asyncio.sleep(0.1 + random.uniform(0.05, 0.15))
+                await asyncio.sleep(0.5)
 
     logger.error(f"Gemini TTS failed after testing available keys: {last_err}")
-    raise RuntimeError(f"Все доступные ключи Gemini исчерпали квоту (429). Дождитесь суточного сброса квоты Google или добавьте новые ключи.")
+    raise RuntimeError(f"Все доступные ключи Gemini исчерпали квоту (429). Дождитесь минутного/суточного сброса квоты Google или добавьте новые ключи.")
 
 
 async def _synthesize_gemini_speech(
@@ -594,11 +602,14 @@ async def _synthesize_gemini_speech(
 ) -> dict:
     """
     Synthesize complete speech script using Gemini TTS using cohesive large chunks (~1200 chars)
-    to minimize API calls (only ~8-12 requests per 15-minute video instead of 117+ requests).
+    with persistent disk caching per chunk and safe pacing to prevent 429 rate limit errors.
     Produces slide-aligned audio and synchronized subtitles (SRT, VTT, and ASS karaoke).
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    chunks_dir = output_dir / "gemini_chunks"
+    chunks_dir.mkdir(parents=True, exist_ok=True)
 
     combined_path = output_dir / "narration.mp3"
     subs_srt_path = output_dir / "subtitles.srt"
@@ -611,17 +622,8 @@ async def _synthesize_gemini_speech(
         full_text = "Heute gibt es wichtige Neuigkeiten."
 
     # Chunk the text into ~1200-character blocks at natural sentence/paragraph boundaries
-    # This reduces 100+ individual slide requests down to ~8-12 requests total!
     chunks = _split_text_into_chunks(full_text, max_chars=1200)
     logger.info(f"Synthesizing script ({len(full_text)} chars, {len(segments)} slides) in {len(chunks)} Gemini TTS chunks ({voice_name})")
-
-    # Quick probe to test Gemini TTS quota availability before starting full batch
-    logger.info("Probing Gemini TTS availability and quota...")
-    try:
-        await _synthesize_gemini_single_chunk("Hallo.", voice_name)
-    except Exception as e:
-        logger.error(f"Gemini TTS quota probe failed: {e}")
-        raise RuntimeError(f"Квота Gemini TTS исчерпана на всех доступных ключах (429). {e}")
 
     if progress_callback:
         progress_callback(0, f"Gemini TTS: 0/{len(chunks)} аудио-блоков")
@@ -629,12 +631,51 @@ async def _synthesize_gemini_speech(
     total_audio = bytearray()
     all_boundaries = []
     cum_ms = 0.0
+    prev_was_cache = True
 
     for idx, chunk_text in enumerate(chunks):
-        if idx > 0:
-            await asyncio.sleep(0.4)  # Gentle pause to stay well within Google RPM limits
+        chunk_clean = chunk_text.strip()
+        chunk_hash = hashlib.md5(f"{chunk_clean}:{voice_name}".encode("utf-8")).hexdigest()[:12]
+        chunk_audio_path = chunks_dir / f"chunk_{idx:03d}_{chunk_hash}.mp3"
+        chunk_meta_path = chunks_dir / f"chunk_{idx:03d}_{chunk_hash}.json"
 
-        mp3_bytes, dur_ms = await _synthesize_gemini_single_chunk(chunk_text, voice_name)
+        mp3_bytes = None
+        dur_ms = 0.0
+        loaded_from_cache = False
+
+        # 1. Check disk cache first - never waste quota on already synthesized chunks!
+        if chunk_audio_path.exists() and chunk_meta_path.exists() and chunk_audio_path.stat().st_size > 500:
+            try:
+                with open(chunk_meta_path, "r", encoding="utf-8") as f_meta:
+                    meta = json.load(f_meta)
+                dur_ms = float(meta["dur_ms"])
+                with open(chunk_audio_path, "rb") as f_aud:
+                    mp3_bytes = f_aud.read()
+                if len(mp3_bytes) > 500:
+                    loaded_from_cache = True
+                    logger.info(f"Loaded Gemini chunk {idx + 1}/{len(chunks)} from disk cache ({dur_ms / 1000:.1f}s)")
+            except Exception as ce:
+                logger.warning(f"Cache read error for chunk {idx}: {ce}")
+                mp3_bytes = None
+
+        # 2. If not cached, synthesize with safe pacing (2.5s) to avoid 15 RPM limit
+        if not loaded_from_cache:
+            if idx > 0 and not prev_was_cache:
+                await asyncio.sleep(2.5)  # Safe pause to strictly stay within Google's 15 RPM limits
+
+            mp3_bytes, dur_ms = await _synthesize_gemini_single_chunk(chunk_text, voice_name)
+
+            # Save to disk cache immediately so partial progress is NEVER lost on error
+            try:
+                with open(chunk_audio_path, "wb") as f_aud:
+                    f_aud.write(mp3_bytes)
+                with open(chunk_meta_path, "w", encoding="utf-8") as f_meta:
+                    json.dump({"dur_ms": dur_ms, "text": chunk_clean, "voice": voice_name}, f_meta, ensure_ascii=False)
+            except Exception as we:
+                logger.warning(f"Failed to cache chunk {idx}: {we}")
+            prev_was_cache = False
+        else:
+            prev_was_cache = True
 
         # Split chunk into sentences for subtitle generation and timing alignment
         sentences = [s.strip() for s in re.split(r'(?<=[.!?…])\s+', chunk_text) if s.strip()]
@@ -656,10 +697,14 @@ async def _synthesize_gemini_speech(
         total_audio.extend(mp3_bytes)
         cum_ms += dur_ms
 
-        logger.info(f"Gemini chunk {idx + 1}/{len(chunks)} done ({dur_ms / 1000:.1f}s). Total audio so far: {cum_ms / 1000:.1f}s")
+        logger.info(f"Gemini chunk {idx + 1}/{len(chunks)} done ({dur_ms / 1000:.1f}s, cached={loaded_from_cache}). Total audio so far: {cum_ms / 1000:.1f}s")
         if progress_callback:
             pct = int((idx + 1) / len(chunks) * 100)
-            progress_callback(pct, f"Gemini TTS: {idx + 1}/{len(chunks)} аудио-блоков ({cum_ms / 1000:.0f}с)")
+            status_text = f"Gemini TTS: {idx + 1}/{len(chunks)} аудио-блоков"
+            if loaded_from_cache:
+                status_text += " (из кэша)"
+            status_text += f" ({cum_ms / 1000:.0f}с)"
+            progress_callback(pct, status_text)
 
     with open(combined_path, "wb") as f_out:
         f_out.write(total_audio)
