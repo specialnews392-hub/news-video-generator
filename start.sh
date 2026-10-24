@@ -5,14 +5,18 @@ echo "=========================================="
 echo "      News Video Generator - Codespace    "
 echo "=========================================="
 
-echo "--> 1. Installing system dependencies (ffmpeg & fonts)..."
+echo "--> 1. Installing system dependencies (ffmpeg, fonts, image dev headers)..."
 sudo apt-get update -y
-sudo apt-get install -y ffmpeg fonts-liberation fonts-dejavu-core
+sudo apt-get install -y ffmpeg fonts-liberation fonts-dejavu-core libjpeg-dev zlib1g-dev libpng-dev
 
-echo "--> 2. Installing Python dependencies..."
+echo "--> 2. Upgrading pip and installing Pillow..."
+pip install --upgrade pip
+pip install pillow
+
+echo "--> 3. Installing Python dependencies..."
 pip install -r requirements.txt
 
-echo "--> 3. Checking gemini_keys.txt..."
+echo "--> 4. Checking gemini_keys.txt..."
 if [ ! -f gemini_keys.txt ]; then
     echo "--------------------------------------------------------"
     echo " ATTENTION: gemini_keys.txt not found!"
@@ -21,5 +25,5 @@ if [ ! -f gemini_keys.txt ]; then
     echo "--------------------------------------------------------"
 fi
 
-echo "--> 4. Launching News Video Generator on port 8501..."
+echo "--> 5. Launching News Video Generator on port 8501..."
 python main.py
