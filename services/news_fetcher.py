@@ -1670,13 +1670,19 @@ async def get_acute_topics_preview(
                     resp = await client.get(url, timeout=7.0)
                     if resp.status_code == 200:
                         feed = feedparser.parse(resp.text)
-                        for e in feed.entries[:3]:
+                        ang_tokens = get_match_tokens(ang)
+                        for e in feed.entries[:5]:
                             pub = e.get("published", "")
                             if get_article_age_days(pub) <= MAX_AGE_DAYS:
+                                e_title = e.get("title", "")
+                                e_text = (e_title + " " + e.get("summary", "")).lower()
+                                # Must match at least one specific angle token to prevent random junk/clickbait
+                                if ang_tokens and not any(tok in e_text for tok in ang_tokens):
+                                    continue
                                 src = getattr(e, "source", None)
                                 src_name = getattr(src, "title", "") if src else "Google News"
                                 return ang, {
-                                    "title": e.get("title", ""),
+                                    "title": e_title,
                                     "source": src_name,
                                     "published": pub,
                                     "summary": e.get("summary", ""),

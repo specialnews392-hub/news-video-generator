@@ -72,14 +72,11 @@ def _load_jobs() -> dict[str, dict]:
                             j["result"]["title_ru"] = t_ru
                         if h_ru and not j["result"].get("thumbnail_hook_ru"):
                             j["result"]["thumbnail_hook_ru"] = h_ru
-                    # If job was waiting for TTS reset when server shut down, keep it in awaiting_tts_choice
-                    if j.get("status") == "waiting_tts_reset":
-                        j["status"] = "awaiting_tts_choice"
-                    # If job was running/queued when server shut down, mark as interrupted so UI can offer resume
-                    elif j.get("status") in ("running", "queued"):
-                        j["status"] = "failed"
+                    # If job was in-flight, waiting or queued when server shut down, mark so UI can offer resume
+                    if j.get("status") in ("waiting_tts_reset", "awaiting_tts_choice", "running", "queued"):
+                        j["status"] = "cancelled"
                         if not j.get("error"):
-                            j["error"] = "Генерация была прервана перезапуском сервера"
+                            j["error"] = "Генерация была прервана (доступно возобновление)"
                         j["current_step"] = "Прервано (доступно возобновление)"
                 return data
         except Exception as e:

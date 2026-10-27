@@ -21,10 +21,13 @@ GEMINI_KEYS_FILE = BASE_DIR / "gemini_keys.txt"
 
 def load_gemini_keys() -> list[str]:
     """Load all Gemini API keys from file, ignoring comments and blank lines."""
+    global GEMINI_KEYS
     if not GEMINI_KEYS_FILE.exists():
+        GEMINI_KEYS = []
         return []
     with open(GEMINI_KEYS_FILE, "r", encoding="utf-8") as f:
-        return [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+        GEMINI_KEYS = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+        return GEMINI_KEYS
 
 GEMINI_KEYS = load_gemini_keys()
 _key_index = 0
@@ -32,17 +35,19 @@ _key_index = 0
 def get_next_gemini_key() -> str:
     """Get next API key with round-robin rotation."""
     global _key_index
-    if not GEMINI_KEYS:
+    keys = load_gemini_keys()
+    if not keys:
         raise ValueError("No Gemini API keys found in gemini_keys.txt")
-    key = GEMINI_KEYS[_key_index % len(GEMINI_KEYS)]
+    key = keys[_key_index % len(keys)]
     _key_index += 1
     return key
 
 def get_random_gemini_key() -> str:
     """Get a random API key."""
-    if not GEMINI_KEYS:
+    keys = load_gemini_keys()
+    if not keys:
         raise ValueError("No Gemini API keys found in gemini_keys.txt")
-    return random.choice(GEMINI_KEYS)
+    return random.choice(keys)
 
 # === Image API Keys & Cloudflare Proxy ===
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")  # Pexels key issuance paused

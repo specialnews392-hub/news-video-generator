@@ -456,6 +456,7 @@ _GEMINI_COOLDOWNS: dict[tuple[str, str], float] = {}
 COOLDOWN_DURATION_SEC = 300  # 5 minutes runtime cooldown for key+model pair on 429
 
 GEMINI_TTS_MODELS = [
+    "gemini-2.5-flash-preview-tts",
     "gemini-3.1-flash-tts-preview",
     "gemini-3.8-flash-tts",
     "gemini-3.8-flash-lite-tts",
@@ -471,7 +472,7 @@ async def check_gemini_tts_status() -> dict:
 
     results = {}
     active_models = []
-    test_phrase = "Test"
+    test_phrase = "Hallo, dies ist ein Audio-Test zur Überprüfung."
 
     cfg = types.GenerateContentConfig(
         response_modalities=["AUDIO"],
@@ -482,7 +483,8 @@ async def check_gemini_tts_status() -> dict:
         )
     )
 
-    test_keys = config.GEMINI_KEYS[:5] if config.GEMINI_KEYS else []
+    all_keys = config.load_gemini_keys() if hasattr(config, "load_gemini_keys") else config.GEMINI_KEYS
+    test_keys = all_keys[:5] if all_keys else []
 
     for m in GEMINI_TTS_MODELS:
         success = False
@@ -548,7 +550,7 @@ async def _synthesize_gemini_single_chunk(text: str, voice_name: str, max_retrie
     for k in expired:
         _GEMINI_COOLDOWNS.pop(k, None)
 
-    all_keys = config.GEMINI_KEYS
+    all_keys = config.load_gemini_keys() if hasattr(config, "load_gemini_keys") else config.GEMINI_KEYS
     if not all_keys:
         raise ValueError("No Gemini API keys found in gemini_keys.txt")
 
@@ -614,15 +616,26 @@ async def _synthesize_gemini_single_chunk(text: str, voice_name: str, max_retrie
                 if not wav_bytes:
                     raise ValueError("No audio payload returned from Gemini TTS")
 
-                # Extract exact duration from WAV header
-                with wave.open(io.BytesIO(wav_bytes)) as wav_file:
-                    frames = wav_file.getnframes()
-                    rate = wav_file.getframerate()
-                    dur_ms = (frames / float(rate)) * 1000.0
+                # Handle both RIFF WAV container and raw 24kHz L16 PCM
+                is_riff = isinstance(wav_bytes, (bytes, bytearray)) and wav_bytes.startswith(b"RIFF")
+                if is_riff:
+                    try:
+                        with wave.open(io.BytesIO(wav_bytes)) as wav_file:
+                            frames = wav_file.getnframes()
+                            rate = wav_file.getframerate()
+                            dur_ms = (frames / float(rate)) * 1000.0
+                        ffmpeg_input = ["-f", "wav", "-i", "pipe:0"]
+                    except Exception:
+                        is_riff = False
 
-                # Convert 24kHz WAV PCM to standard 24kHz mono MP3
+                if not is_riff:
+                    # Raw 16-bit signed mono PCM at 24kHz (48,000 bytes/sec)
+                    dur_ms = (len(wav_bytes) / 48000.0) * 1000.0
+                    ffmpeg_input = ["-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0"]
+
+                # Convert to standard 24kHz mono MP3
                 proc = subprocess.run(
-                    [exe, "-y", "-f", "wav", "-i", "pipe:0", "-c:a", "libmp3lame", "-b:a", "128k", "-ar", "24000", "-ac", "1", "-f", "mp3", "pipe:1"],
+                    [exe, "-y"] + ffmpeg_input + ["-c:a", "libmp3lame", "-b:a", "128k", "-ar", "24000", "-ac", "1", "-f", "mp3", "pipe:1"],
                     input=wav_bytes,
                     capture_output=True,
                     check=True
@@ -633,38 +646,47 @@ async def _synthesize_gemini_single_chunk(text: str, voice_name: str, max_retrie
                 last_err = e
                 err_str = str(e)
                 if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    _GEMINI_COOLDOWNS[(key, model_name)] = time.time() + COOLDOWN_DURATION_SEC
+                    m_del = re.search(r'retryDelay["\']?:\s*["\']?(\d+)s', err_str)
+                    del_sec = int(m_del.group(1)) if m_del else 0
                     
-                    # If key has quota_limit_value: 0 (permanently zero regional quota), never sleep, skip immediately!
-                    if "quota_limit_value': '0'" in err_str or "quota_limit_value\": \"0\"" in err_str:
-                        logger.warning(f"Gemini TTS: key ...{key[-6:]} has 0 regional quota (europe-west1: 0). Skipping immediately.")
-                        continue
-
-                    logger.warning(f"Gemini TTS 429 on model {model_name} (key ...{key[-6:]}). In-memory cooldown {COOLDOWN_DURATION_SEC}s.")
-                    await asyncio.sleep(1.0)
+                    if del_sec > 120 or "GenerateRequestsPerDay" in err_str or "limit: 10" in err_str or "limit '10'" in err_str:
+                        # This specific key exhausted daily quota (long cooldown)
+                        _GEMINI_COOLDOWNS[(key, model_name)] = time.time() + max(3600.0, float(del_sec))
+                        logger.warning(f"Gemini TTS: Ключ ...{key[-6:]} исчерпал суточный лимит Google ({model_name}). До сброса: {del_sec}с.")
+                    elif "quota_limit_value': '0'" in err_str or "quota_limit_value\": \"0\"" in err_str:
+                        _GEMINI_COOLDOWNS[(key, model_name)] = time.time() + 86400.0
+                        logger.warning(f"Gemini TTS: Ключ ...{key[-6:]} имеет 0 региональную квоту ({model_name}). Пропуск.")
+                    else:
+                        # Temporary 60s RPM cooldown
+                        _GEMINI_COOLDOWNS[(key, model_name)] = time.time() + 60.0
+                        logger.warning(f"Gemini TTS 429 RPM на модели {model_name} (ключ ...{key[-6:]}). Минутный кулдаун.")
+                    await asyncio.sleep(0.5)
                 else:
                     logger.warning(f"Gemini TTS attempt {attempt + 1} (model {model_name}) failed: {e}")
                     await asyncio.sleep(0.5)
 
-        # Check if error is a daily quota limit or long retryDelay (e.g. > 120s or GenerateRequestsPerDay)
-        err_str = str(last_err) if last_err else ""
-        if "GenerateRequestsPerDay" in err_str or "limit: 10" in err_str or "limit '10'" in err_str:
-            logger.warning("Gemini TTS: Обнаружен суточный лимит Google (10 запросов/день). Прерываем повторные попытки.")
-            break
-        m_del = re.search(r'retryDelay["\']?:\s*["\']?(\d+)s', err_str)
-        if m_del and int(m_del.group(1)) > 120:
-            logger.warning(f"Gemini TTS: Обнаружено время ожидания квоты {m_del.group(1)}с (> 2 мин). Прерываем повторные попытки.")
+        # Check if ALL keys are completely exhausted for the day
+        now = time.time()
+        has_alive_key = False
+        for k in all_keys:
+            if any(_GEMINI_COOLDOWNS.get((k, m), 0) <= now + 120 for m in GEMINI_TTS_MODELS):
+                has_alive_key = True
+                break
+
+        if not has_alive_key:
+            logger.warning("Gemini TTS: Все доступные ключи исчерпали суточный лимит Google (10 запросов/день). Прерываем.")
             break
 
-        # If round finished due to temporary RPM limit across all keys, wait 25s for the 60s window to roll over
-        if round_idx < 2 and last_err and ("429" in str(last_err) or "RESOURCE_EXHAUSTED" in str(last_err)):
-            wait_sec = 25
-            logger.warning(f"Все активные ключи Gemini TTS исчерпали минутный лимит запросов (RPM). Ожидание {wait_sec}с для сброса квоты Google (раунд {round_idx + 1}/3)...")
+        # If round finished due to temporary RPM limit across available keys, wait for the 60s window to roll over
+        if round_idx < 2:
+            wait_sec = 20
+            logger.info(f"Ожидание {wait_sec}с для сброса минутного лимита запросов (RPM) Google (раунд {round_idx + 1}/3)...")
             await asyncio.sleep(wait_sec)
-            # Clear cooldowns for top active keys
-            for k in all_keys[:5]:
+            # Clear short-term cooldowns for keys that are not on long daily limit
+            for k in all_keys:
                 for m in GEMINI_TTS_MODELS:
-                    _GEMINI_COOLDOWNS.pop((k, m), None)
+                    if _GEMINI_COOLDOWNS.get((k, m), 0) <= time.time() + 120:
+                        _GEMINI_COOLDOWNS.pop((k, m), None)
 
     seconds_left, reset_time_str = calculate_gemini_reset_time(last_err)
     logger.error(f"Gemini TTS failed after testing available keys: {last_err}. До сброса суточной квоты: {reset_time_str}")

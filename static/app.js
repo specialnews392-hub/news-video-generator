@@ -710,10 +710,38 @@ function resumeInterruptedJob() {
     }
 }
 
+async function chooseTTSActionForJob(jobId, action = 'switch_to_edge') {
+    const targetId = jobId || window._interruptedJobId || currentJobId || localStorage.getItem('active_news_job_id');
+    if (!targetId) {
+        alert('Идентификатор задачи не найден');
+        return;
+    }
+
+    try {
+        setStatus('busy', 'Переключение на Microsoft Neural...');
+        const resp = await fetch(`/api/job/${targetId}/tts-choice`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: action })
+        });
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.detail || 'Не удалось переключить озвучку');
+        }
+        currentJobId = targetId;
+        localStorage.setItem('active_news_job_id', currentJobId);
+        dismissInterruptedJob();
+        showPanel('progress');
+        startPolling();
+    } catch (e) {
+        alert('Ошибка при переключении: ' + e.message);
+        setStatus('ready', 'Готов к работе');
+    }
+}
+
 function dismissInterruptedJob() {
     const banner = document.getElementById('interruptedJobBanner');
     if (banner) banner.style.display = 'none';
-    localStorage.removeItem('active_news_job_id');
     window._interruptedJobId = null;
 }
 
@@ -734,8 +762,10 @@ function showPanel(name) {
 // === Script Modal Dialog ===
 let loadedScriptText = "";
 
-async function openScriptModal() {
-    if (!currentJobId) return;
+async function openScriptModal(jobId) {
+    const targetId = jobId || currentJobId || window._interruptedJobId || localStorage.getItem('active_news_job_id');
+    if (!targetId) return;
+    currentJobId = targetId;
     
     const modal = document.getElementById('scriptModal');
     const titleEl = document.getElementById('modalScriptTitle');
@@ -862,6 +892,42 @@ function addToHistory(job, prepend = true) {
     const topicText = escapeHtml(job.topic || 'Без темы');
     const dateText = job.created_at ? new Date(job.created_at).toLocaleString('ru-RU') : '';
     const isCompleted = (job.status === 'completed');
+    const isInterrupted = (job.status === 'cancelled' || job.status === 'failed' || job.status === 'awaiting_tts_choice');
+
+    let actionsHtml = '';
+    if (isCompleted) {
+        actionsHtml = `
+            <button type="button" class="btn-hist-action btn-hist-edit" onclick="event.stopPropagation(); openThumbnailModal('${job.id}')" title="Редактировать обложку">
+                🎨 Обложка
+            </button>
+            <a href="/api/download/${job.id}/video" class="btn-hist-action btn-hist-dl" onclick="event.stopPropagation()" title="Скачать видео MP4" target="_blank">
+                📹 Видео
+            </a>
+            <a href="/api/download/${job.id}/thumbnail" class="btn-hist-action" onclick="event.stopPropagation()" title="Скачать обложку" target="_blank">
+                🖼️
+            </a>
+            <span class="history-item-status completed">✓ Готово</span>
+        `;
+    } else if (isInterrupted) {
+        actionsHtml = `
+            <button type="button" class="btn-hist-action" onclick="event.stopPropagation(); retryCurrentJob('${job.id}')" title="Продолжить генерацию с сохраненного места" style="background: linear-gradient(135deg, #10b981, #059669); color: #fff; font-weight: 600; padding: 4px 10px; border-radius: 6px; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">
+                <span>🔄</span> Возобновить
+            </button>
+            <button type="button" class="btn-hist-action" onclick="event.stopPropagation(); chooseTTSActionForJob('${job.id}', 'switch_to_edge')" title="Озвучить Microsoft Neural (без ожидания квот)" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); padding: 4px 10px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">
+                <span>🎙️</span> Microsoft
+            </button>
+            ${(job.has_script || job.script_data) ? `
+                <button type="button" class="btn-hist-action" onclick="event.stopPropagation(); openScriptModal('${job.id}')" title="Посмотреть текст сценария" style="padding: 4px 8px; border-radius: 6px; cursor: pointer;">
+                    👁️ Сценарий
+                </button>
+            ` : ''}
+            <span class="history-item-status failed" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.4);">
+                ⚠️ Прервано (${job.progress || 0}%)
+            </span>
+        `;
+    } else {
+        actionsHtml = `<span class="history-item-status ${job.status}">${job.status}</span>`;
+    }
 
     item.innerHTML = `
         <img src="/api/job/${job.id}/thumbnail?t=${Date.now()}" class="history-thumb-mini" alt="" onerror="this.style.display='none'" />
@@ -870,25 +936,19 @@ function addToHistory(job, prepend = true) {
             <span class="history-item-meta">${dateText} · ${titleDisplay}</span>
         </div>
         <div class="history-item-actions">
-            ${isCompleted ? `
-                <button type="button" class="btn-hist-action btn-hist-edit" onclick="event.stopPropagation(); openThumbnailModal('${job.id}')" title="Редактировать обложку">
-                    🎨 Обложка
-                </button>
-                <a href="/api/download/${job.id}/video" class="btn-hist-action btn-hist-dl" onclick="event.stopPropagation()" title="Скачать видео MP4" target="_blank">
-                    📹 Видео
-                </a>
-                <a href="/api/download/${job.id}/thumbnail" class="btn-hist-action" onclick="event.stopPropagation()" title="Скачать обложку" target="_blank">
-                    🖼️
-                </a>
-            ` : ''}
-            <span class="history-item-status ${job.status}">${isCompleted ? '✓ Готово' : job.status}</span>
+            ${actionsHtml}
         </div>
     `;
     
     item.onclick = () => {
         currentJobId = job.id;
         currentJobData = job;
-        showResults(job);
+        if (isCompleted) {
+            showResults(job);
+        } else {
+            showInterruptedJobBanner(job);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
     };
     
     const empty = historyList.querySelector('.history-empty');
@@ -900,6 +960,37 @@ function addToHistory(job, prepend = true) {
         } else {
             historyList.appendChild(item);
         }
+    }
+}
+
+function showInterruptedJobBanner(job) {
+    if (!job) return;
+    window._interruptedJobId = job.id;
+    currentJobId = job.id;
+    currentJobData = job;
+
+    const banner = document.getElementById('interruptedJobBanner');
+    const bannerText = document.getElementById('interruptedJobText');
+    if (banner && bannerText) {
+        const stepText = job.current_step || 'Прервано';
+        const prog = job.progress || 0;
+        bannerText.innerHTML = `<b>Тема:</b> «${escapeHtml(job.topic || 'Без темы')}»<br>` +
+            `<span style="color: #94a3b8; font-size: 12px;">Статус: <b>${escapeHtml(stepText)}</b> (${prog}%). Сохранен сценарий и готовые аудио-фрагменты.</span>`;
+        banner.style.display = 'block';
+    }
+
+    // Pre-fill input form fields with the interrupted job's data so the form isn't blank
+    const topicInput = document.getElementById('topicInput');
+    if (topicInput && !topicInput.value && job.topic) {
+        topicInput.value = job.topic;
+    }
+    const langSelect = document.getElementById('languageSelect');
+    if (langSelect && job.language) {
+        langSelect.value = job.language;
+    }
+    const voiceSelect = document.getElementById('voiceSelect');
+    if (voiceSelect && job.voice_id) {
+        voiceSelect.value = job.voice_id;
     }
 }
 
@@ -917,10 +1008,12 @@ async function loadHistory() {
         historyList.innerHTML = '';
         
         const jobs = data.jobs || [];
+        window.allKnownJobs = jobs;
         // Sort newest first
         jobs.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
         
         let completedCount = 0;
+        let interruptedCount = 0;
         for (const job of jobs) {
             if (job.status === 'completed') {
                 try {
@@ -929,15 +1022,33 @@ async function loadHistory() {
                 } catch (je) {
                     console.warn('Error adding job to history:', job.id, je);
                 }
+            } else if (job.status === 'failed' || job.status === 'cancelled' || job.status === 'awaiting_tts_choice') {
+                // Show interrupted jobs in history if they have script or progress
+                if (job.has_script || job.script_data || (job.progress && job.progress > 0)) {
+                    try {
+                        addToHistory(job, false);
+                        interruptedCount++;
+                    } catch (je) {
+                        console.warn('Error adding interrupted job to history:', job.id, je);
+                    }
+                }
             }
         }
         
-        if (completedCount === 0) {
-            historyList.innerHTML = '<div class="history-empty">Пока нет завершённых генераций</div>';
+        if (completedCount === 0 && interruptedCount === 0) {
+            historyList.innerHTML = '<div class="history-empty">Пока нет завершённых или сохранённых генераций</div>';
         }
 
+        // Find the most recent interrupted job
+        const latestInterrupted = jobs.find(j => j.status === 'failed' || j.status === 'cancelled' || j.status === 'awaiting_tts_choice');
+
         // Check if there was an active job running before the page refresh
-        const activeId = localStorage.getItem('active_news_job_id');
+        let activeId = localStorage.getItem('active_news_job_id');
+        if (!activeId && latestInterrupted) {
+            activeId = latestInterrupted.id;
+            localStorage.setItem('active_news_job_id', activeId);
+        }
+
         if (activeId) {
             try {
                 const resp = await fetch(`/api/status/${activeId}`);
@@ -946,13 +1057,11 @@ async function loadHistory() {
                     currentJobId = job.id;
                     currentJobData = job;
 
-                    if (job.status === 'running' || job.status === 'queued' || job.status === 'awaiting_slide_review' || job.status === 'awaiting_tts_choice' || job.status === 'waiting_tts_reset') {
+                    if (job.status === 'running' || job.status === 'queued' || job.status === 'awaiting_slide_review' || job.status === 'waiting_tts_reset') {
                         document.getElementById('jobTopic').textContent = job.topic || '';
                         showPanel('progress');
                         if (job.status === 'awaiting_slide_review') {
                             setStatus('busy', '⏸️ Ожидание проверки слайдов');
-                        } else if (job.status === 'awaiting_tts_choice') {
-                            setStatus('busy', '⚠️ Ожидание выбора озвучки');
                         } else if (job.status === 'waiting_tts_reset') {
                             setStatus('busy', '⏳ Ожидание сброса квоты Google');
                         } else {
@@ -963,24 +1072,18 @@ async function loadHistory() {
                     } else if (job.status === 'completed') {
                         showResults(job);
                         setStatus('ready', 'Готов к работе');
-                    } else if (job.status === 'failed' || job.status === 'cancelled') {
-                        // Show banner to allow resuming from cached script and audio chunks!
-                        const banner = document.getElementById('interruptedJobBanner');
-                        const bannerText = document.getElementById('interruptedJobText');
-                        if (banner && bannerText) {
-                            const stepText = job.current_step || 'Прервано';
-                            const prog = job.progress || 0;
-                            bannerText.textContent = `Тема: «${job.topic || 'Без темы'}» · Прервано на шаге: ${stepText} (${prog}%)`;
-                            banner.style.display = 'block';
-                            window._interruptedJobId = job.id;
-                        }
+                    } else if (job.status === 'failed' || job.status === 'cancelled' || job.status === 'awaiting_tts_choice') {
+                        showInterruptedJobBanner(job);
                     }
-                } else {
-                    localStorage.removeItem('active_news_job_id');
+                } else if (latestInterrupted) {
+                    showInterruptedJobBanner(latestInterrupted);
                 }
             } catch(err) {
                 console.warn('Error reconnecting to active job:', err);
+                if (latestInterrupted) showInterruptedJobBanner(latestInterrupted);
             }
+        } else if (latestInterrupted) {
+            showInterruptedJobBanner(latestInterrupted);
         }
 
     } catch (e) {
@@ -2826,7 +2929,7 @@ async function openAcuteTopicsModal(isNext = false) {
                 const isDifferentHook = hookRu && t.hook_sample && hookRu.toLowerCase().trim() !== t.hook_sample.toLowerCase().trim();
 
                 return `
-                <div class="acute-topic-card" onclick="selectAcuteTopicByIndex(${idx})">
+                <div class="acute-topic-card" onclick="openTopicConfirmModal(${idx}, 'angle_topic', event)">
                     <div class="acute-topic-header">
                         <span class="acute-topic-badge">${escapeHtml(t.badge || '⚡ Тема')}</span>
                         ${t.is_recent ? '<span class="acute-topic-status used">Использовалась ранее</span>' : '<span class="acute-topic-status fresh">🔥 Свежий ракурс</span>'}
@@ -2838,7 +2941,7 @@ async function openAcuteTopicsModal(isNext = false) {
                     ${t.desc_ru ? `<div class="acute-topic-desc">${escapeHtml(t.desc_ru)}</div>` : ''}
 
                     ${t.live_headline ? `
-                        <div class="acute-topic-live-box">
+                        <div class="acute-topic-live-box interactive" onclick="openTopicConfirmModal(${idx}, 'live_news', event)" title="Кликните, чтобы выбрать ровно эту конкретную новость">
                             <div class="acute-live-tag">
                                 <span class="live-dot"></span>
                                 <span>Свежая новость (${escapeHtml(t.live_source || 'Агентство')}):</span>
@@ -2846,6 +2949,10 @@ async function openAcuteTopicsModal(isNext = false) {
                             </div>
                             ${t.live_headline_ru ? `<div class="acute-live-ru">🇷🇺 ${escapeHtml(t.live_headline_ru)}</div>` : ''}
                             <div class="acute-live-orig">🇩🇪 «${escapeHtml(t.live_headline)}»</div>
+                            <div class="acute-live-choose-hint">
+                                <span style="font-size: 11px; color: #94a3b8;">Конкретный сегодняшний инфоповод</span>
+                                <span class="acute-live-choose-badge">⚡ Выбрать эту новость →</span>
+                            </div>
                         </div>
                     ` : ''}
 
@@ -2857,7 +2964,7 @@ async function openAcuteTopicsModal(isNext = false) {
                                 ${isDifferentHook ? `<small style="color: var(--text-muted); font-size: 11px; margin-left: 4px;">(🇩🇪 ${escapeHtml(t.hook_sample)})</small>` : ''}
                             </span>
                         </div>
-                        <button type="button" class="btn-select-topic">Выбрать в 1 клик →</button>
+                        <button type="button" class="btn-select-topic" onclick="openTopicConfirmModal(${idx}, 'angle_topic', event)">Выбрать сюжет →</button>
                     </div>
                 </div>
             `;
@@ -2930,50 +3037,205 @@ if (topicInput) {
     });
 }
 
-async function selectAcuteTopicByIndex(idx) {
-    if (currentAcuteTopicsList && currentAcuteTopicsList[idx]) {
-        const item = currentAcuteTopicsList[idx];
-        selectedAcuteAngleId = item.id || '';
-        try {
-            fetch('/api/topics/acute/select', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    angle_id: item.id,
-                    topic_query: item.topic_query || item.title
-                })
-            }).catch(e => console.warn('Failed to record acute topic selection:', e));
-        } catch (_) {}
+let currentPendingSelection = null;
 
-        // Select the most natural language title for topicInput
-        const vSelect = document.getElementById('voiceSelect');
-        const isDe = vSelect && vSelect.value.startsWith('de');
-        let chosenTitle = item.title;
-        if (!isDe && item.title_ru) {
-            chosenTitle = item.title_ru;
-        } else if (item.title) {
-            chosenTitle = item.title;
-        } else {
-            chosenTitle = item.topic_query || '';
+function checkSimilarHistoryTitles(query) {
+    if (!query) return null;
+    const qWords = query.toLowerCase()
+        .replace(/[.,/#!$%^&*;:{}=\-_`~()«»"']/g, ' ')
+        .split(/\s+/)
+        .filter(w => w.length >= 4 && !['und', 'der', 'die', 'das', 'fuer', 'nach', 'über', 'uber', 'beim', 'deutschland', 'россия', 'новый', 'новости', 'новые', 'heute'].includes(w));
+    
+    if (qWords.length === 0) return null;
+
+    const jobs = window.allKnownJobs || [];
+    for (const j of jobs) {
+        const titlesToCheck = [
+            j.title,
+            j.generated_title,
+            j.topic,
+            (j.result && j.result.title),
+            j.title_ru,
+            (j.result && j.result.title_ru)
+        ].filter(Boolean);
+
+        for (const rawT of titlesToCheck) {
+            const t = rawT.toLowerCase();
+            let matches = 0;
+            for (const w of qWords) {
+                if (t.includes(w)) matches++;
+            }
+            if (matches >= 2 || (qWords.length <= 2 && matches >= 1)) {
+                const dateStr = j.created_at ? new Date(j.created_at).toLocaleDateString('ru-RU') : 'ранее';
+                return {
+                    found: true,
+                    matchedTitle: rawT,
+                    date: dateStr,
+                    jobId: j.id
+                };
+            }
         }
-
-        if (chosenTitle) {
-            chosenTitle = chosenTitle.replace(/\s*[-–—|]\s*(Tagesschau|Spiegel|Welt|Focus|Bild|ZDF|FAZ|SZ|N-TV|Zeit|Lenta|РИА Новости|ТАСС|Интерфакс|Коммерсантъ).*$/i, '').trim();
-        }
-
-        selectAcuteTopic(chosenTitle);
     }
+    return null;
 }
 
-function selectAcuteTopic(query) {
-    const input = document.getElementById('topicInput');
-    if (input) {
-        input.value = query;
-        input.focus();
-        input.style.boxShadow = '0 0 0 2px var(--accent)';
-        setTimeout(() => { input.style.boxShadow = ''; }, 1200);
+function openTopicConfirmModal(idx, mode, e) {
+    if (e) {
+        e.stopPropagation();
+        e.preventDefault();
     }
-    closeAcuteTopicsModal();
+    if (!currentAcuteTopicsList || !currentAcuteTopicsList[idx]) return;
+    const item = currentAcuteTopicsList[idx];
+
+    const vSelect = document.getElementById('voiceSelect');
+    const isDe = vSelect && vSelect.value.startsWith('de');
+
+    let chosenHeadline = '';
+    let headlineRu = '';
+    let headlineOrig = '';
+    let sourceName = '';
+    let freshnessText = '';
+    let isLiveNews = (mode === 'live_news' && !!item.live_headline);
+
+    if (isLiveNews) {
+        headlineOrig = item.live_headline;
+        headlineRu = item.live_headline_ru || item.live_headline;
+        chosenHeadline = isDe ? headlineOrig : (headlineRu || headlineOrig);
+        sourceName = item.live_source || 'Немецкое новостное агентство';
+        freshnessText = item.live_pub_date ? `Опубликовано: ${item.live_pub_date}` : 'Свежая публикация (последние 24ч)';
+    } else {
+        headlineOrig = item.title;
+        headlineRu = item.title_ru || item.title;
+        chosenHeadline = isDe ? headlineOrig : (headlineRu || headlineOrig);
+        sourceName = 'Аналитический сюжет повестки дня';
+        freshnessText = 'Актуальный редакционный ракурс';
+    }
+
+    if (chosenHeadline) {
+        chosenHeadline = chosenHeadline.replace(/\s*[-–—|]\s*(Tagesschau|Spiegel|Welt|Focus|Bild|ZDF|FAZ|SZ|N-TV|Zeit|Lenta|РИА Новости|ТАСС|Интерфакс|Коммерсантъ).*$/i, '').trim();
+    }
+
+    currentPendingSelection = {
+        item: item,
+        mode: mode,
+        chosenTitle: chosenHeadline,
+        angleId: item.id || ''
+    };
+
+    // Fill Modal Fields
+    const typeBadge = document.getElementById('topicConfirmTypeBadge');
+    const elHeadlineRu = document.getElementById('topicConfirmHeadlineRu');
+    const elHeadlineOrig = document.getElementById('topicConfirmHeadlineOrig');
+    const elDesc = document.getElementById('topicConfirmDesc');
+    const elFreshness = document.getElementById('topicConfirmFreshness');
+    const elSource = document.getElementById('topicConfirmSource');
+    const elDupStatus = document.getElementById('topicConfirmDuplicateStatus');
+    const elDupDetail = document.getElementById('topicConfirmDuplicateDetail');
+    const elDupBox = document.getElementById('topicConfirmDuplicateBox');
+    const elPlanText = document.getElementById('topicConfirmPlanText');
+
+    if (isLiveNews) {
+        if (typeBadge) typeBadge.innerHTML = `<span style="background: rgba(59, 130, 246, 0.2); color: #93c5fd; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; border: 1px solid rgba(59, 130, 246, 0.4);">⚡ ВЫБРАНА КОНКРЕТНАЯ СВЕЖАЯ СТАТЬЯ ДНЯ</span>`;
+        if (elPlanText) elPlanText.textContent = `Скрипт будет сфокусирован именно на этой конкретной новости из немецких СМИ, подтянет связанные факты и создаст целевой новостной ролик.`;
+    } else {
+        if (typeBadge) typeBadge.innerHTML = `<span style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; border: 1px solid rgba(245, 158, 11, 0.4);">🤝 ВЫБРАН АКТУАЛЬНЫЙ РАКУРС ТЕМЫ</span>`;
+        if (elPlanText) elPlanText.textContent = `Будет собран широкий пул проверенной фактуры агентств по этому сюжету, написан глубокий аналитический сценарий и собран ролик с субтитрами.`;
+    }
+
+    if (elHeadlineRu) elHeadlineRu.textContent = `🇷🇺 ${headlineRu || chosenHeadline}`;
+    if (elHeadlineOrig) elHeadlineOrig.textContent = headlineOrig ? `🇩🇪 «${headlineOrig}»` : '';
+    if (elDesc) {
+        if (item.desc_ru) {
+            elDesc.style.display = 'block';
+            elDesc.textContent = item.desc_ru;
+        } else {
+            elDesc.style.display = 'none';
+        }
+    }
+    if (elFreshness) elFreshness.textContent = freshnessText;
+    if (elSource) elSource.textContent = `Источник: ${sourceName}`;
+
+    // Duplicate Check against user's history
+    const dupCheck = checkSimilarHistoryTitles(chosenHeadline + ' ' + (item.title || ''));
+    if (dupCheck && dupCheck.found) {
+        if (elDupBox) {
+            elDupBox.style.background = 'rgba(239, 68, 68, 0.12)';
+            elDupBox.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+        }
+        if (elDupStatus) {
+            elDupStatus.style.color = '#f87171';
+            elDupStatus.textContent = '⚠️ Найден похожий ролик в архиве';
+        }
+        if (elDupDetail) {
+            elDupDetail.textContent = `${dupCheck.date}: «${dupCheck.matchedTitle.substring(0, 52)}...»`;
+        }
+    } else {
+        if (elDupBox) {
+            elDupBox.style.background = 'rgba(59, 130, 246, 0.08)';
+            elDupBox.style.borderColor = 'rgba(59, 130, 246, 0.25)';
+        }
+        if (elDupStatus) {
+            elDupStatus.style.color = '#38bdf8';
+            elDupStatus.textContent = '✅ Похожих роликов не найдено';
+        }
+        if (elDupDetail) {
+            elDupDetail.textContent = 'Тема полностью уникальна для вашего канала';
+        }
+    }
+
+    // Hide acute topics modal and show confirm modal
+    const acuteModal = document.getElementById('acuteTopicsModal');
+    if (acuteModal) acuteModal.style.display = 'none';
+
+    const confirmModal = document.getElementById('topicConfirmModal');
+    if (confirmModal) confirmModal.style.display = 'flex';
+}
+
+function closeTopicConfirmModal(e) {
+    if (e && e.target && e.target.id !== 'topicConfirmModal' && !e.target.classList.contains('modal-close')) {
+        return;
+    }
+    const modal = document.getElementById('topicConfirmModal');
+    if (modal) modal.style.display = 'none';
+}
+
+function backToAcuteTopicsModal() {
+    const confirmModal = document.getElementById('topicConfirmModal');
+    if (confirmModal) confirmModal.style.display = 'none';
+    const acuteModal = document.getElementById('acuteTopicsModal');
+    if (acuteModal) acuteModal.style.display = 'flex';
+}
+
+async function approveAndStartGeneration() {
+    if (!currentPendingSelection) return;
+    const { item, chosenTitle, angleId } = currentPendingSelection;
+    selectedAcuteAngleId = angleId || '';
+
+    // Mark acute angle as selected
+    try {
+        fetch('/api/topics/acute/select', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                angle_id: angleId,
+                topic_query: chosenTitle
+            })
+        }).catch(e => console.warn('Failed to record acute topic selection:', e));
+    } catch (_) {}
+
+    // Set topic input
+    if (topicInput) {
+        topicInput.value = chosenTitle;
+    }
+
+    // Close both modals
+    const confirmModal = document.getElementById('topicConfirmModal');
+    if (confirmModal) confirmModal.style.display = 'none';
+    const acuteModal = document.getElementById('acuteTopicsModal');
+    if (acuteModal) acuteModal.style.display = 'none';
+
+    // Start video generation immediately
+    await startGeneration();
 }
 
 

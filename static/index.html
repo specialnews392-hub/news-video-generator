@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=20261024_04">
 </head>
 <body>
     <!-- Animated background -->
@@ -61,21 +61,27 @@
             <!-- Generator Panel -->
             <section class="panel generator-panel" id="generatorPanel">
                 <!-- Interrupted Job Banner -->
-                <div id="interruptedJobBanner" style="display: none; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 12px; padding: 16px 20px; margin-bottom: 24px;">
+                <div id="interruptedJobBanner" style="display: none; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 12px; padding: 18px 22px; margin-bottom: 24px; box-shadow: 0 4px 20px rgba(245, 158, 11, 0.1);">
                     <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
-                        <div>
-                            <div style="font-weight: 700; color: #f59e0b; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
-                                <span>⚠️</span> <span>Предыдущая генерация была прервана</span>
+                        <div style="flex: 1; min-width: 280px;">
+                            <div style="font-weight: 700; color: #fbbf24; font-size: 15px; margin-bottom: 6px; display: flex; align-items: center; gap: 8px;">
+                                <span style="font-size: 18px;">⚠️</span> <span>Предыдущая генерация была прервана (доступно возобновление)</span>
                             </div>
-                            <div id="interruptedJobText" style="font-size: 13px; color: var(--text-secondary);">
+                            <div id="interruptedJobText" style="font-size: 13px; color: var(--text-secondary); line-height: 1.5;">
                                 Тема: ...
                             </div>
                         </div>
-                        <div style="display: flex; gap: 10px; align-items: center;">
-                            <button type="button" class="btn btn-primary" onclick="resumeInterruptedJob()" style="background: linear-gradient(135deg, #10b981, #059669); color: #fff; padding: 8px 18px; border-radius: 8px; font-weight: 600; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;">
-                                <span>🔄</span> Продолжить с того же места
+                        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                            <button type="button" class="btn btn-primary" onclick="resumeInterruptedJob()" style="background: linear-gradient(135deg, #10b981, #059669); color: #fff; padding: 10px 20px; border-radius: 8px; font-weight: 700; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; box-shadow: 0 2px 10px rgba(16, 185, 129, 0.3);">
+                                <span>🔄</span> Возобновить генерацию
                             </button>
-                            <button type="button" class="btn btn-secondary" onclick="dismissInterruptedJob()" style="padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text-muted); cursor: pointer;">
+                            <button type="button" class="btn btn-secondary" onclick="chooseTTSActionForJob(window._interruptedJobId, 'switch_to_edge')" style="background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.4); color: #60a5fa; padding: 10px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;" title="Озвучить через Microsoft Neural (без лимитов)">
+                                <span>🎙️</span> Озвучить Microsoft
+                            </button>
+                            <button type="button" class="btn btn-secondary" onclick="openScriptModal(window._interruptedJobId)" style="padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: rgba(255, 255, 255, 0.05); color: var(--text-secondary); cursor: pointer;" title="Посмотреть текст сценария">
+                                👁️ Сценарий
+                            </button>
+                            <button type="button" class="btn btn-secondary" onclick="dismissInterruptedJob()" style="padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text-muted); cursor: pointer;" title="Скрыть это уведомление">
                                 ✕ Закрыть
                             </button>
                         </div>
@@ -1107,6 +1113,61 @@
         </div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <!-- Topic Pre-Generation Approval Modal -->
+    <div class="modal-backdrop" id="topicConfirmModal" style="display: none; z-index: 1050;" onclick="closeTopicConfirmModal(event)">
+        <div class="modal-dialog" style="max-width: 680px; width: 92%; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7); border: 1px solid rgba(59, 130, 246, 0.35);" onclick="event.stopPropagation()">
+            <div class="modal-header" style="background: linear-gradient(135deg, rgba(30, 58, 138, 0.35) 0%, rgba(15, 23, 42, 0.8) 100%);">
+                <div class="modal-title-group">
+                    <span class="modal-badge facts-badge" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.35);">🔎 ПРОВЕРКА ИНФОПОВОДА ПЕРЕД ГЕНЕРАЦИЕЙ</span>
+                    <h3 id="topicConfirmModalTitle" style="margin-top: 4px; font-size: 18px; color: #f8fafc;">
+                        Согласование новости для ролика
+                    </h3>
+                </div>
+                <button type="button" class="modal-close" onclick="closeTopicConfirmModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 22px 24px;">
+                <!-- Choice Type Badge -->
+                <div id="topicConfirmTypeBadge" style="margin-bottom: 14px;"></div>
+
+                <!-- Main Topic Title Section -->
+                <div class="topic-confirm-card" style="background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-bottom: 14px;">
+                    <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">Сюжет / Заголовок для видео:</div>
+                    <div id="topicConfirmHeadlineRu" style="font-size: 16px; font-weight: 700; color: #f8fafc; line-height: 1.4; margin-bottom: 4px;"></div>
+                    <div id="topicConfirmHeadlineOrig" style="font-size: 13px; color: #94a3b8; font-style: italic; line-height: 1.3;"></div>
+                    <div id="topicConfirmDesc" style="font-size: 13px; color: #cbd5e1; margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,0.1); line-height: 1.4;"></div>
+                </div>
+
+                <!-- Freshness & Source Info -->
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px;">
+                    <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 8px; padding: 12px 14px;">
+                        <div style="font-size: 11px; color: #34d399; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;">⏱️ Свежесть первоисточника</div>
+                        <div id="topicConfirmFreshness" style="font-size: 13px; color: #f1f5f9; font-weight: 600; margin-top: 3px;">Свежая новость</div>
+                        <div id="topicConfirmSource" style="font-size: 12px; color: #94a3b8; margin-top: 2px;">Агентство: СМИ</div>
+                    </div>
+                    <div id="topicConfirmDuplicateBox" style="background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 8px; padding: 12px 14px;">
+                        <div id="topicConfirmDuplicateTag" style="font-size: 11px; color: #60a5fa; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;">🔄 Проверка на повторы</div>
+                        <div id="topicConfirmDuplicateStatus" style="font-size: 13px; color: #f1f5f9; font-weight: 600; margin-top: 3px;">Повторов не найдено</div>
+                        <div id="topicConfirmDuplicateDetail" style="font-size: 11px; color: #94a3b8; margin-top: 2px;">В архиве ваших роликов нет схожих тем</div>
+                    </div>
+                </div>
+
+                <!-- What will be generated (Highlights) -->
+                <div style="background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 12px 14px; font-size: 12px; color: #94a3b8; line-height: 1.5;">
+                    💡 <strong style="color: #cbd5e1;">Что сделает скрипт:</strong>
+                    <span id="topicConfirmPlanText">Будет собран проверенный пул фактуры из немецких СМИ, написан глубокий аналитический сценарий и сгенерирован готовый ролик с субтитрами.</span>
+                </div>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; gap: 12px; background: rgba(0,0,0,0.25);">
+                <button type="button" class="btn btn-secondary" onclick="backToAcuteTopicsModal()" style="display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; font-weight: 600; border-radius: 6px;">
+                    <span>↩️</span> Выбрать другую новость
+                </button>
+                <button type="button" class="btn btn-primary" id="btnApproveAndGenerate" onclick="approveAndStartGeneration()" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 22px; font-size: 14px; font-weight: 700; background: linear-gradient(135deg, #10b981 0%, #059669 100%); border: none; border-radius: 6px; cursor: pointer; color: #ffffff; box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);">
+                    <span>🚀</span> Одобрить и начать генерацию видео →
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js?v=20261027_01"></script>
 </body>
 </html>
