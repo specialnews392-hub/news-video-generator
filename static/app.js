@@ -2921,59 +2921,108 @@ async function openAcuteTopicsModal(isNext = false) {
         }
 
         if (grid) {
-            grid.innerHTML = topics.map((t, idx) => {
-                const titleRu = t.title_ru || t.title;
-                const titleOrig = t.title;
-                const isDifferentTitle = titleRu && titleOrig && titleRu.toLowerCase().trim() !== titleOrig.toLowerCase().trim();
-                const hookRu = t.hook_sample_ru || t.hook_sample;
-                const isDifferentHook = hookRu && t.hook_sample && hookRu.toLowerCase().trim() !== t.hook_sample.toLowerCase().trim();
-
-                return `
-                <div class="acute-topic-card" onclick="openTopicConfirmModal(${idx}, 'angle_topic', event)">
-                    <div class="acute-topic-header">
-                        <span class="acute-topic-badge">${escapeHtml(t.badge || '⚡ Тема')}</span>
-                        ${t.is_recent ? '<span class="acute-topic-status used">Использовалась ранее</span>' : '<span class="acute-topic-status fresh">🔥 Свежий ракурс</span>'}
-                    </div>
-                    
-                    <div class="acute-topic-title-ru">🇷🇺 ${escapeHtml(titleRu)}</div>
-                    ${isDifferentTitle ? `<div class="acute-topic-title-orig">🇩🇪 ${escapeHtml(titleOrig)}</div>` : ''}
-                    
-                    ${t.desc_ru ? `<div class="acute-topic-desc">${escapeHtml(t.desc_ru)}</div>` : ''}
-
-                    ${t.live_headline ? `
-                        <div class="acute-topic-live-box interactive" onclick="openTopicConfirmModal(${idx}, 'live_news', event)" title="Кликните, чтобы выбрать ровно эту конкретную новость">
-                            <div class="acute-live-tag">
-                                <span class="live-dot"></span>
-                                <span>Свежая новость (${escapeHtml(t.live_source || 'Агентство')}):</span>
-                                ${t.live_pub_date ? `<span class="acute-live-date">⏱️ ${escapeHtml(t.live_pub_date)}</span>` : ''}
-                            </div>
-                            ${t.live_headline_ru ? `<div class="acute-live-ru">🇷🇺 ${escapeHtml(t.live_headline_ru)}</div>` : ''}
-                            <div class="acute-live-orig">🇩🇪 «${escapeHtml(t.live_headline)}»</div>
-                            <div class="acute-live-choose-hint">
-                                <span style="font-size: 11px; color: #94a3b8;">Конкретный сегодняшний инфоповод</span>
-                                <span class="acute-live-choose-badge">⚡ Выбрать эту новость →</span>
-                            </div>
-                        </div>
-                    ` : ''}
-
-                    <div class="acute-topic-footer">
-                        <div class="acute-topic-hook-wrap">
-                            <span class="acute-hook-label">Кликбейт на обложку:</span>
-                            <span class="acute-hook-value">
-                                <strong style="color: #34d399;">«${escapeHtml(hookRu)}»</strong>
-                                ${isDifferentHook ? `<small style="color: var(--text-muted); font-size: 11px; margin-left: 4px;">(🇩🇪 ${escapeHtml(t.hook_sample)})</small>` : ''}
-                            </span>
-                        </div>
-                        <button type="button" class="btn-select-topic" onclick="openTopicConfirmModal(${idx}, 'angle_topic', event)">Выбрать сюжет →</button>
-                    </div>
-                </div>
-            `;
-            }).join('');
+            renderAcuteTopicsGrid();
         }
     } catch (e) {
         if (loader) loader.style.display = 'none';
         if (grid) grid.innerHTML = `<div style="grid-column: 1 / -1; color: var(--error); padding: 20px; text-align: center;">Ошибка: ${escapeHtml(e.message)}</div>`;
     }
+}
+
+function renderAcuteTopicsGrid() {
+    const grid = document.getElementById('acuteTopicsGrid');
+    if (!grid || !currentAcuteTopicsList) return;
+
+    grid.innerHTML = currentAcuteTopicsList.map((t, idx) => {
+        const titleRu = t.title_ru || t.title;
+        const titleOrig = t.title;
+        const isDifferentTitle = titleRu && titleOrig && titleRu.toLowerCase().trim() !== titleOrig.toLowerCase().trim();
+        const hookRu = t.hook_sample_ru || t.hook_sample;
+        const isDifferentHook = hookRu && t.hook_sample && hookRu.toLowerCase().trim() !== t.hook_sample.toLowerCase().trim();
+
+        // Get currently active live article for this card
+        const artList = (t.live_articles && t.live_articles.length > 0) ? t.live_articles : (t.live_headline ? [{
+            title: t.live_headline,
+            title_ru: t.live_headline_ru,
+            source: t.live_source,
+            pub_date: t.live_pub_date,
+            summary: t.live_summary
+        }] : []);
+
+        const activeIdx = t.active_art_idx || 0;
+        const curArt = artList[activeIdx] || artList[0] || null;
+
+        return `
+        <div class="acute-topic-card" onclick="openTopicConfirmModal(${idx}, 'angle_topic', event)">
+            <div class="acute-topic-header">
+                <span class="acute-topic-badge">${escapeHtml(t.badge || '⚡ Тема')}</span>
+                ${t.is_recent ? '<span class="acute-topic-status used">Использовалась ранее</span>' : '<span class="acute-topic-status fresh">🔥 Свежий ракурс</span>'}
+            </div>
+            
+            <div class="acute-topic-title-ru">
+                <span class="lang-tag ru-tag">RU</span>${escapeHtml(titleRu)}
+            </div>
+            ${isDifferentTitle ? `
+                <div class="acute-topic-title-orig">
+                    <span class="lang-tag de-tag">DE</span>${escapeHtml(titleOrig)}
+                </div>
+            ` : ''}
+            
+            ${t.desc_ru ? `<div class="acute-topic-desc">${escapeHtml(t.desc_ru)}</div>` : ''}
+
+            ${curArt ? `
+                <div class="acute-topic-live-box interactive" onclick="openTopicConfirmModal(${idx}, 'live_news', event)" title="Кликните, чтобы выбрать ровно эту конкретную новость дня">
+                    <div class="acute-live-tag">
+                        <span class="live-dot"></span>
+                        <span>Свежая новость (${escapeHtml(curArt.source || 'СМИ')}):</span>
+                        ${curArt.pub_date ? `<span class="acute-live-date">⏱️ ${escapeHtml(curArt.pub_date)}</span>` : ''}
+                        ${artList.length > 1 ? `
+                            <button type="button" class="acute-cycle-btn" onclick="cycleCardArticle(${idx}, event)" title="Показать другую статью по этой теме">
+                                🔀 Другая (${activeIdx + 1}/${artList.length})
+                            </button>
+                        ` : ''}
+                    </div>
+                    ${curArt.title_ru ? `
+                        <div class="acute-live-ru">
+                            <span class="lang-tag ru-tag">RU</span>${escapeHtml(curArt.title_ru)}
+                        </div>
+                    ` : ''}
+                    <div class="acute-live-orig">
+                        <span class="lang-tag de-tag">DE</span>«${escapeHtml(curArt.title)}»
+                    </div>
+                    <div class="acute-live-choose-hint">
+                        <span style="font-size: 11px; color: #94a3b8;">Целевой сегодняшний инфоповод</span>
+                        <span class="acute-live-choose-badge">⚡ Выбрать эту новость →</span>
+                    </div>
+                </div>
+            ` : ''}
+
+            <div class="acute-topic-footer">
+                <div class="acute-topic-hook-wrap">
+                    <span class="acute-hook-label">Кликбейт на обложку:</span>
+                    <span class="acute-hook-value">
+                        <strong style="color: #34d399;">«${escapeHtml(hookRu)}»</strong>
+                        ${isDifferentHook ? `<small style="color: var(--text-muted); font-size: 11px; margin-left: 4px;">(🇩🇪 ${escapeHtml(t.hook_sample)})</small>` : ''}
+                    </span>
+                </div>
+                <button type="button" class="btn-select-topic" onclick="openTopicConfirmModal(${idx}, 'angle_topic', event)">Выбрать сюжет →</button>
+            </div>
+        </div>
+    `;
+    }).join('');
+}
+
+function cycleCardArticle(idx, e) {
+    if (e) {
+        e.stopPropagation();
+        e.preventDefault();
+    }
+    if (!currentAcuteTopicsList || !currentAcuteTopicsList[idx]) return;
+    const t = currentAcuteTopicsList[idx];
+    const arts = t.live_articles || [];
+    if (arts.length <= 1) return;
+    t.active_art_idx = ((t.active_art_idx || 0) + 1) % arts.length;
+    renderAcuteTopicsGrid();
 }
 
 async function loadNextAcuteBatch() {
@@ -3038,6 +3087,8 @@ if (topicInput) {
 }
 
 let currentPendingSelection = null;
+let currentConfirmIndex = 0;
+let currentConfirmMode = 'live_news';
 
 function checkSimilarHistoryTitles(query) {
     if (!query) return null;
@@ -3085,45 +3136,63 @@ function openTopicConfirmModal(idx, mode, e) {
         e.preventDefault();
     }
     if (!currentAcuteTopicsList || !currentAcuteTopicsList[idx]) return;
+
+    currentConfirmIndex = idx;
     const item = currentAcuteTopicsList[idx];
+
+    // Default mode: if card has live news and requested live_news, or if requested angle_topic
+    const hasLive = (item.live_articles && item.live_articles.length > 0) || !!item.live_headline;
+    currentConfirmMode = (mode === 'live_news' && hasLive) ? 'live_news' : (mode || 'angle_topic');
+
+    if (item.active_art_idx === undefined) {
+        item.active_art_idx = 0;
+    }
+
+    updateConfirmModalUI();
+
+    // Hide acute topics modal and show confirm modal
+    const acuteModal = document.getElementById('acuteTopicsModal');
+    if (acuteModal) acuteModal.style.display = 'none';
+
+    const confirmModal = document.getElementById('topicConfirmModal');
+    if (confirmModal) confirmModal.style.display = 'flex';
+}
+
+function switchConfirmMode(mode) {
+    currentConfirmMode = mode;
+    updateConfirmModalUI();
+}
+
+function selectModalArticle(artIdx) {
+    if (!currentAcuteTopicsList || !currentAcuteTopicsList[currentConfirmIndex]) return;
+    const item = currentAcuteTopicsList[currentConfirmIndex];
+    item.active_art_idx = artIdx;
+    updateConfirmModalUI();
+    renderAcuteTopicsGrid();
+}
+
+function cycleModalArticle() {
+    if (!currentAcuteTopicsList || !currentAcuteTopicsList[currentConfirmIndex]) return;
+    const item = currentAcuteTopicsList[currentConfirmIndex];
+    const arts = (item.live_articles && item.live_articles.length > 0) ? item.live_articles : [];
+    if (arts.length <= 1) return;
+    item.active_art_idx = ((item.active_art_idx || 0) + 1) % arts.length;
+    updateConfirmModalUI();
+    renderAcuteTopicsGrid();
+}
+
+function updateConfirmModalUI() {
+    if (!currentAcuteTopicsList || !currentAcuteTopicsList[currentConfirmIndex]) return;
+    const item = currentAcuteTopicsList[currentConfirmIndex];
 
     const vSelect = document.getElementById('voiceSelect');
     const isDe = vSelect && vSelect.value.startsWith('de');
 
-    let chosenHeadline = '';
-    let headlineRu = '';
-    let headlineOrig = '';
-    let sourceName = '';
-    let freshnessText = '';
-    let isLiveNews = (mode === 'live_news' && !!item.live_headline);
-
-    if (isLiveNews) {
-        headlineOrig = item.live_headline;
-        headlineRu = item.live_headline_ru || item.live_headline;
-        chosenHeadline = isDe ? headlineOrig : (headlineRu || headlineOrig);
-        sourceName = item.live_source || 'Немецкое новостное агентство';
-        freshnessText = item.live_pub_date ? `Опубликовано: ${item.live_pub_date}` : 'Свежая публикация (последние 24ч)';
-    } else {
-        headlineOrig = item.title;
-        headlineRu = item.title_ru || item.title;
-        chosenHeadline = isDe ? headlineOrig : (headlineRu || headlineOrig);
-        sourceName = 'Аналитический сюжет повестки дня';
-        freshnessText = 'Актуальный редакционный ракурс';
-    }
-
-    if (chosenHeadline) {
-        chosenHeadline = chosenHeadline.replace(/\s*[-–—|]\s*(Tagesschau|Spiegel|Welt|Focus|Bild|ZDF|FAZ|SZ|N-TV|Zeit|Lenta|РИА Новости|ТАСС|Интерфакс|Коммерсантъ).*$/i, '').trim();
-    }
-
-    currentPendingSelection = {
-        item: item,
-        mode: mode,
-        chosenTitle: chosenHeadline,
-        angleId: item.id || ''
-    };
-
-    // Fill Modal Fields
-    const typeBadge = document.getElementById('topicConfirmTypeBadge');
+    // UI elements
+    const tabLive = document.getElementById('tabConfirmLiveNews');
+    const tabAngle = document.getElementById('tabConfirmAngleTopic');
+    const activeBadge = document.getElementById('topicConfirmActiveBadge');
+    const headlineLabel = document.getElementById('topicConfirmHeadlineLabel');
     const elHeadlineRu = document.getElementById('topicConfirmHeadlineRu');
     const elHeadlineOrig = document.getElementById('topicConfirmHeadlineOrig');
     const elDesc = document.getElementById('topicConfirmDesc');
@@ -3133,21 +3202,132 @@ function openTopicConfirmModal(idx, mode, e) {
     const elDupDetail = document.getElementById('topicConfirmDuplicateDetail');
     const elDupBox = document.getElementById('topicConfirmDuplicateBox');
     const elPlanText = document.getElementById('topicConfirmPlanText');
+    const altWrap = document.getElementById('topicAltArticlesWrap');
+    const altList = document.getElementById('topicAltArticlesList');
+    const altBadge = document.getElementById('topicAltCountBadge');
+    const btnCycle = document.getElementById('btnCycleArticleModal');
+    const cycleNum = document.getElementById('cycleModalArtNum');
 
-    if (isLiveNews) {
-        if (typeBadge) typeBadge.innerHTML = `<span style="background: rgba(59, 130, 246, 0.2); color: #93c5fd; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; border: 1px solid rgba(59, 130, 246, 0.4);">⚡ ВЫБРАНА КОНКРЕТНАЯ СВЕЖАЯ СТАТЬЯ ДНЯ</span>`;
-        if (elPlanText) elPlanText.textContent = `Скрипт будет сфокусирован именно на этой конкретной новости из немецких СМИ, подтянет связанные факты и создаст целевой новостной ролик.`;
-    } else {
-        if (typeBadge) typeBadge.innerHTML = `<span style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; border: 1px solid rgba(245, 158, 11, 0.4);">🤝 ВЫБРАН АКТУАЛЬНЫЙ РАКУРС ТЕМЫ</span>`;
-        if (elPlanText) elPlanText.textContent = `Будет собран широкий пул проверенной фактуры агентств по этому сюжету, написан глубокий аналитический сценарий и собран ролик с субтитрами.`;
+    // Get live articles list
+    const articles = (item.live_articles && item.live_articles.length > 0) ? item.live_articles : (item.live_headline ? [{
+        title: item.live_headline,
+        title_ru: item.live_headline_ru,
+        source: item.live_source,
+        pub_date: item.live_pub_date,
+        summary: item.live_summary
+    }] : []);
+
+    const hasLive = articles.length > 0;
+    if (!hasLive && currentConfirmMode === 'live_news') {
+        currentConfirmMode = 'angle_topic';
     }
 
-    if (elHeadlineRu) elHeadlineRu.textContent = `🇷🇺 ${headlineRu || chosenHeadline}`;
-    if (elHeadlineOrig) elHeadlineOrig.textContent = headlineOrig ? `🇩🇪 «${headlineOrig}»` : '';
+    if (tabLive) {
+        tabLive.classList.toggle('active', currentConfirmMode === 'live_news');
+        tabLive.style.opacity = hasLive ? '1' : '0.4';
+        tabLive.disabled = !hasLive;
+    }
+    if (tabAngle) {
+        tabAngle.classList.toggle('active', currentConfirmMode === 'angle_topic');
+    }
+
+    let chosenHeadline = '';
+    let headlineRu = '';
+    let headlineOrig = '';
+    let sourceName = '';
+    let freshnessText = '';
+    let descText = '';
+
+    if (currentConfirmMode === 'live_news' && hasLive) {
+        const curIdx = item.active_art_idx || 0;
+        const curArt = articles[curIdx] || articles[0];
+
+        headlineOrig = curArt.title;
+        headlineRu = curArt.title_ru || curArt.title;
+        chosenHeadline = isDe ? headlineOrig : (headlineRu || headlineOrig);
+        sourceName = curArt.source || 'Немецкое новостное агентство';
+        freshnessText = curArt.pub_date ? `Опубликовано: ${curArt.pub_date}` : 'Свежая публикация (последние 24ч)';
+        descText = curArt.summary || item.desc_ru || 'Оперативные подробности и фактура СМИ по данному инфоповоду.';
+
+        if (activeBadge) {
+            activeBadge.className = 'topic-mode-subbadge';
+            activeBadge.textContent = '⚡ Конкретная новость дня';
+        }
+        if (headlineLabel) {
+            headlineLabel.textContent = 'Заголовок целевой новости для видео:';
+        }
+        if (elPlanText) {
+            elPlanText.textContent = 'Скрипт будет сфокусирован именно на этой конкретной новости из немецких СМИ, подтянет связанные факты и создаст целевой новостной ролик.';
+        }
+
+        // Show Alternative Articles section if more than 1
+        if (articles.length > 1) {
+            if (altWrap) altWrap.style.display = 'block';
+            if (altBadge) altBadge.textContent = `Статья ${curIdx + 1} из ${articles.length}`;
+            if (altList) {
+                altList.innerHTML = articles.map((art, aIdx) => `
+                    <div class="topic-alt-item ${aIdx === curIdx ? 'active' : ''}" onclick="selectModalArticle(${aIdx})">
+                        <div class="topic-alt-title">
+                            <span class="lang-tag ru-tag">RU</span>${escapeHtml(art.title_ru || art.title)}
+                        </div>
+                        <div class="topic-alt-meta">
+                            ${escapeHtml(art.source || 'СМИ')} • ${escapeHtml(art.pub_date || '')}
+                        </div>
+                    </div>
+                `).join('');
+            }
+            if (btnCycle) {
+                btnCycle.style.display = 'inline-flex';
+                if (cycleNum) cycleNum.textContent = `${curIdx + 1}/${articles.length}`;
+            }
+        } else {
+            if (altWrap) altWrap.style.display = 'none';
+            if (btnCycle) btnCycle.style.display = 'none';
+        }
+    } else {
+        // Mode: angle_topic
+        headlineOrig = item.title;
+        headlineRu = item.title_ru || item.title;
+        chosenHeadline = isDe ? headlineOrig : (headlineRu || headlineOrig);
+        sourceName = 'Редакционный аналитический сюжет';
+        freshnessText = 'Актуальный ракурс повестки дня';
+        descText = item.desc_ru || '';
+
+        if (activeBadge) {
+            activeBadge.className = 'topic-mode-subbadge angle';
+            activeBadge.textContent = '📋 Редакционный сюжет';
+        }
+        if (headlineLabel) {
+            headlineLabel.textContent = 'Сюжет / Тематический ракурс для видео:';
+        }
+        if (elPlanText) {
+            elPlanText.textContent = 'Будет собран широкий пул проверенной фактуры немецких СМИ по этому ракурсу, написан глубокий аналитический сценарий и собран ролик с субтитрами.';
+        }
+        if (altWrap) altWrap.style.display = 'none';
+        if (btnCycle) btnCycle.style.display = 'none';
+    }
+
+    if (chosenHeadline) {
+        chosenHeadline = chosenHeadline.replace(/\s*[-–—|]\s*(Tagesschau|Spiegel|Welt|Focus|Bild|ZDF|FAZ|SZ|N-TV|Zeit|Lenta|РИА Новости|ТАСС|Интерфакс|Коммерсантъ).*$/i, '').trim();
+    }
+
+    currentPendingSelection = {
+        item: item,
+        mode: currentConfirmMode,
+        chosenTitle: chosenHeadline,
+        angleId: item.id || ''
+    };
+
+    if (elHeadlineRu) {
+        elHeadlineRu.innerHTML = `<span class="lang-tag ru-tag">RU</span>${escapeHtml(headlineRu || chosenHeadline)}`;
+    }
+    if (elHeadlineOrig) {
+        elHeadlineOrig.innerHTML = headlineOrig ? `<span class="lang-tag de-tag">DE</span>«${escapeHtml(headlineOrig)}»` : '';
+    }
     if (elDesc) {
-        if (item.desc_ru) {
+        if (descText) {
             elDesc.style.display = 'block';
-            elDesc.textContent = item.desc_ru;
+            elDesc.textContent = descText;
         } else {
             elDesc.style.display = 'none';
         }
@@ -3155,8 +3335,8 @@ function openTopicConfirmModal(idx, mode, e) {
     if (elFreshness) elFreshness.textContent = freshnessText;
     if (elSource) elSource.textContent = `Источник: ${sourceName}`;
 
-    // Duplicate Check against user's history
-    const dupCheck = checkSimilarHistoryTitles(chosenHeadline + ' ' + (item.title || ''));
+    // Duplicate Check against user's history based on the selected headline
+    const dupCheck = checkSimilarHistoryTitles(chosenHeadline);
     if (dupCheck && dupCheck.found) {
         if (elDupBox) {
             elDupBox.style.background = 'rgba(239, 68, 68, 0.12)';
@@ -3171,24 +3351,17 @@ function openTopicConfirmModal(idx, mode, e) {
         }
     } else {
         if (elDupBox) {
-            elDupBox.style.background = 'rgba(59, 130, 246, 0.08)';
-            elDupBox.style.borderColor = 'rgba(59, 130, 246, 0.25)';
+            elDupBox.style.background = 'rgba(16, 185, 129, 0.08)';
+            elDupBox.style.borderColor = 'rgba(16, 185, 129, 0.25)';
         }
         if (elDupStatus) {
-            elDupStatus.style.color = '#38bdf8';
+            elDupStatus.style.color = '#34d399';
             elDupStatus.textContent = '✅ Похожих роликов не найдено';
         }
         if (elDupDetail) {
             elDupDetail.textContent = 'Тема полностью уникальна для вашего канала';
         }
     }
-
-    // Hide acute topics modal and show confirm modal
-    const acuteModal = document.getElementById('acuteTopicsModal');
-    if (acuteModal) acuteModal.style.display = 'none';
-
-    const confirmModal = document.getElementById('topicConfirmModal');
-    if (confirmModal) confirmModal.style.display = 'flex';
 }
 
 function closeTopicConfirmModal(e) {

@@ -1633,31 +1633,38 @@ async def get_acute_topics_preview(
     used_live_articles = set()
 
     # Match catalog sub-angles against strictly fresh news only
-    catalog_matched: list[tuple[dict, dict]] = []
+    catalog_matched: list[tuple[dict, list[dict]]] = []
     unmatched_catalog = []
 
     for ang in available_catalog:
         tokens = get_match_tokens(ang)
-        matched_art = None
-        best_score = 0
+        matched_arts = []
         for a in relevant_fresh_live:
-            if a.get("title") in used_live_articles:
-                continue
             t_low = a["title"].lower()
-            score = sum(3 for tok in tokens if re.search(r'\b' + re.escape(tok), t_low))
-            if score > best_score and score >= 3:
-                best_score = score
-                matched_art = a
-        if matched_art:
-            used_live_articles.add(matched_art["title"])
-            catalog_matched.append((ang, matched_art))
+            if any(re.search(r'\b' + re.escape(tok), t_low) for tok in tokens):
+                raw_sum = a.get("summary", "")
+                clean_sum = re.sub(r'<[^>]+>', ' ', raw_sum).strip()
+                clean_sum = re.sub(r'\s+', ' ', clean_sum)
+                matched_arts.append({
+                    "title": a["title"],
+                    "source": a.get("source", "СМИ"),
+                    "published": a.get("published", ""),
+                    "pub_date": format_pub_date(a.get("published", "")),
+                    "summary": clean_sum[:220],
+                })
+                if len(matched_arts) >= 4:
+                    break
+        if matched_arts:
+            for m in matched_arts:
+                used_live_articles.add(m["title"])
+            catalog_matched.append((ang, matched_arts))
         else:
             unmatched_catalog.append(ang)
 
     # For unmatched catalog angles, search Google News strictly with when:3d and bounded concurrency
     if unmatched_catalog:
         sem = asyncio.Semaphore(8)
-        async def _fetch_angle_fresh_news(ang: dict, client: httpx.AsyncClient) -> tuple[dict, dict | None]:
+        async def _fetch_angle_fresh_news(ang: dict, client: httpx.AsyncClient) -> tuple[dict, list[dict]]:
             queries = ang.get("queries", [])
             base_q = queries[0] if queries else ang.get("title", "")
             # Use 1-2 significant words so Google News returns live breaking news with dates
@@ -1665,13 +1672,14 @@ async def get_acute_topics_preview(
             search_q = " ".join(words) if words else base_q.split()[0]
             full_q = f"{search_q} when:3d".strip()
             url = f"https://news.google.com/rss/search?q={quote_plus(full_q)}&hl={lang}&gl=DE&ceid=DE:{lang}"
+            found_arts = []
             async with sem:
                 try:
                     resp = await client.get(url, timeout=7.0)
                     if resp.status_code == 200:
                         feed = feedparser.parse(resp.text)
                         ang_tokens = get_match_tokens(ang)
-                        for e in feed.entries[:5]:
+                        for e in feed.entries[:8]:
                             pub = e.get("published", "")
                             if get_article_age_days(pub) <= MAX_AGE_DAYS:
                                 e_title = e.get("title", "")
@@ -1681,31 +1689,38 @@ async def get_acute_topics_preview(
                                     continue
                                 src = getattr(e, "source", None)
                                 src_name = getattr(src, "title", "") if src else "Google News"
-                                return ang, {
+                                raw_sum = e.get("summary", "")
+                                clean_sum = re.sub(r'<[^>]+>', ' ', raw_sum).strip()
+                                clean_sum = re.sub(r'\s+', ' ', clean_sum)
+                                found_arts.append({
                                     "title": e_title,
                                     "source": src_name,
                                     "published": pub,
-                                    "summary": e.get("summary", ""),
-                                }
+                                    "pub_date": format_pub_date(pub),
+                                    "summary": clean_sum[:220],
+                                })
+                                if len(found_arts) >= 4:
+                                    break
                 except Exception:
                     pass
-            return ang, None
+            return ang, found_arts
 
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         async with httpx.AsyncClient(timeout=12.0, headers=headers) as client:
             online_tasks = [_fetch_angle_fresh_news(ang, client) for ang in unmatched_catalog]
             online_results = await asyncio.gather(*online_tasks, return_exceptions=True)
             for res in online_results:
-                if isinstance(res, tuple) and res[1] is not None:
+                if isinstance(res, tuple) and res[1]:
                     catalog_matched.append(res)
 
     # Build map of matched live headlines
-    matched_map = {ang["id"]: art for ang, art in catalog_matched}
+    matched_map = {ang["id"]: arts for ang, arts in catalog_matched}
 
     # 1. First add catalog angles with confirmed live news attached (highest freshness)
     for ang in available_catalog:
         if ang["id"] in matched_map:
-            matched_art = matched_map[ang["id"]]
+            arts = matched_map[ang["id"]]
+            primary_art = arts[0] if arts else {}
             main_q = ang["queries"][0]
             hook_choice = random.choice(ang.get("hook_ideas", ["AKTUELLES EREIGNIS"]))
             hook_choice_ru = ang.get("hook_ideas_ru", {}).get(hook_choice, "")
@@ -1719,10 +1734,12 @@ async def get_acute_topics_preview(
                 "topic_query": main_q,
                 "hook_sample": hook_choice,
                 "hook_sample_ru": hook_choice_ru,
-                "live_headline": matched_art.get("title", ""),
+                "live_headline": primary_art.get("title", ""),
                 "live_headline_ru": "",
-                "live_source": matched_art.get("source", "Агентство"),
-                "live_pub_date": format_pub_date(matched_art.get("published", "")),
+                "live_source": primary_art.get("source", "Агентство"),
+                "live_pub_date": primary_art.get("pub_date", ""),
+                "live_summary": primary_art.get("summary", ""),
+                "live_articles": arts,
                 "is_recent": False,
                 "is_live_dynamic": False,
             })
@@ -1747,6 +1764,8 @@ async def get_acute_topics_preview(
                 "live_headline_ru": "",
                 "live_source": "",
                 "live_pub_date": "",
+                "live_summary": "",
+                "live_articles": [],
                 "is_recent": False,
                 "is_live_dynamic": False,
             })
@@ -1780,11 +1799,14 @@ async def get_acute_topics_preview(
 
         hk_de, hk_ru = random.choice(HOOK_PRESETS)
         pub_date_str = format_pub_date(art.get("published", ""))
+        raw_sum = art.get("summary", "")
+        clean_sum = re.sub(r'<[^>]+>', ' ', raw_sum).strip()
+        clean_sum = re.sub(r'\s+', ' ', clean_sum)
         fresh_cards_pool.append({
             "id": dynamic_id,
             "title": art_title,
             "title_ru": "",
-            "desc_ru": art.get("summary", "")[:180] if art.get("summary") else "",
+            "desc_ru": clean_sum[:220],
             "badge": f"🔥 {art.get('source', 'СМИ')}",
             "topic_query": art_title,
             "hook_sample": hk_de,
@@ -1793,6 +1815,14 @@ async def get_acute_topics_preview(
             "live_headline_ru": "",
             "live_source": art.get("source", "СМИ"),
             "live_pub_date": pub_date_str,
+            "live_summary": clean_sum[:220],
+            "live_articles": [{
+                "title": art_title,
+                "source": art.get("source", "СМИ"),
+                "published": art.get("published", ""),
+                "pub_date": pub_date_str,
+                "summary": clean_sum[:220],
+            }],
             "is_recent": False,
             "is_live_dynamic": True,
         })
@@ -1825,11 +1855,15 @@ async def get_acute_topics_preview(
                                 if dynamic_id in all_excluded:
                                     continue
                                 hk_de, hk_ru = random.choice(HOOK_PRESETS)
+                                raw_sum = e.get("summary", "")
+                                clean_sum = re.sub(r'<[^>]+>', ' ', raw_sum).strip()
+                                clean_sum = re.sub(r'\s+', ' ', clean_sum)
+                                pub_str = format_pub_date(e_pub)
                                 fresh_cards_pool.append({
                                     "id": dynamic_id,
                                     "title": e_title,
                                     "title_ru": "",
-                                    "desc_ru": "",
+                                    "desc_ru": clean_sum[:220],
                                     "badge": f"🔥 {src_name}",
                                     "topic_query": e_title,
                                     "hook_sample": hk_de,
@@ -1837,7 +1871,15 @@ async def get_acute_topics_preview(
                                     "live_headline": e_title,
                                     "live_headline_ru": "",
                                     "live_source": src_name,
-                                    "live_pub_date": format_pub_date(e_pub),
+                                    "live_pub_date": pub_str,
+                                    "live_summary": clean_sum[:220],
+                                    "live_articles": [{
+                                        "title": e_title,
+                                        "source": src_name,
+                                        "published": e_pub,
+                                        "pub_date": pub_str,
+                                        "summary": clean_sum[:220],
+                                    }],
                                     "is_recent": False,
                                     "is_live_dynamic": True,
                                 })
@@ -1851,6 +1893,9 @@ async def get_acute_topics_preview(
     async def translate_card(card: dict):
         if not card["title_ru"]:
             card["title_ru"] = await asyncio.to_thread(translate_to_ru, card["title"])
+        for art in card.get("live_articles", []):
+            if not art.get("title_ru") and art.get("title"):
+                art["title_ru"] = await asyncio.to_thread(translate_to_ru, art["title"])
         if not card["desc_ru"] and card.get("is_live_dynamic"):
             card["desc_ru"] = f"Свежая публикация ({card['live_source']}): оперативные данные и детали."
         elif card["desc_ru"] and card.get("is_live_dynamic"):
@@ -1858,7 +1903,8 @@ async def get_acute_topics_preview(
         if not card["hook_sample_ru"] and card["hook_sample"]:
             card["hook_sample_ru"] = await asyncio.to_thread(translate_to_ru, card["hook_sample"])
         if card["live_headline"] and not card.get("live_headline_ru"):
-            card["live_headline_ru"] = await asyncio.to_thread(translate_to_ru, card["live_headline"])
+            first_art = card.get("live_articles", [{}])[0]
+            card["live_headline_ru"] = first_art.get("title_ru") or await asyncio.to_thread(translate_to_ru, card["live_headline"])
         return card
 
     enriched_cards = await asyncio.gather(*[translate_card(c) for c in sliced_cards])
