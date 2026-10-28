@@ -584,6 +584,9 @@
                         <a class="btn-download" id="btnDownloadSubs">
                             <span>💬</span> Субтитры (SRT)
                         </a>
+                        <button type="button" class="btn-download btn-download-prompt" id="btnDownloadPrompt" onclick="openThumbnailPromptModal()">
+                            <span>💡</span> Промпт заставки (AI)
+                        </button>
                         <button type="button" class="btn-download btn-download-sources" onclick="openSourcesModal()">
                             <span>📰</span> Фактура и источники
                         </button>
@@ -746,6 +749,7 @@
                             <div class="thumb-chip-group">
                                 <button type="button" class="btn-thumb-chip" id="btnFlipPhoto" onclick="toggleThumbFlip()" title="Отразить фото зеркально по горизонтали">🪞 Отразить фото</button>
                                 <button type="button" class="btn-thumb-chip active" id="btnToggleSafeZone" onclick="toggleSafeZone()" title="Показать/скрыть метку времени YouTube">👁 Зона YouTube</button>
+                                <button type="button" class="btn-thumb-chip" onclick="openThumbnailPromptModal(currentJobId)" style="color: #fbbf24; border-color: rgba(251, 191, 36, 0.4); font-weight: 600;" title="Открыть ТЗ для арт-директора / нейросети">💡 ТЗ для арт-директора</button>
                             </div>
                         </div>
                     </div>
@@ -822,6 +826,49 @@
         </div>
     </div>
 
+    <!-- Thumbnail Prompt (Art Director) Modal -->
+    <div class="modal-backdrop" id="thumbnailPromptModal" style="display: none;" onclick="closeThumbnailPromptModal(event)">
+        <div class="modal-dialog thumb-prompt-dialog" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span class="modal-badge facts-badge">AI ART DIRECTOR · YOUTUBE THUMBNAIL</span>
+                    <h3 id="modalPromptTitle">Промпт для генерации обложки</h3>
+                </div>
+                <button type="button" class="modal-close" onclick="closeThumbnailPromptModal()">&times;</button>
+            </div>
+            <div class="modal-meta" id="modalPromptMeta">
+                Готовое профессиональное ТЗ для ChatGPT / Claude / Midjourney на основе проверенной фактуры и вывода этого ролика.
+            </div>
+            <div class="modal-body thumb-prompt-body">
+                <div class="prompt-text-container">
+                    <div class="prompt-header-bar">
+                        <span class="prompt-status-tag" id="promptStatusTag">✓ Фактура и вывод синхронизированы</span>
+                        <div class="prompt-quick-actions">
+                            <button type="button" class="btn-prompt-mini" onclick="copyThumbnailPrompt()" id="btnCopyPromptMini">
+                                📋 Скопировать
+                            </button>
+                        </div>
+                    </div>
+                    <pre id="modalPromptText" class="prompt-pre">Загрузка промпта...</pre>
+                </div>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <button type="button" class="btn-action-primary" id="btnCopyPromptMain" onclick="copyThumbnailPrompt()" style="display: inline-flex; align-items: center; gap: 6px; padding: 10px 18px; font-weight: 700; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: #000; border: none; border-radius: 6px; cursor: pointer;">
+                        <span>📋</span> Скопировать весь промпт
+                    </button>
+                    <button type="button" class="btn-action-secondary" onclick="openInChatGPTWithPrompt()" style="display: inline-flex; align-items: center; gap: 6px; padding: 10px 16px; font-weight: 600; border-radius: 6px; border: 1px solid rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.12); color: #34d399; cursor: pointer;">
+                        <span>🤖</span> Открыть в ChatGPT
+                    </button>
+                    <a class="btn-action-secondary" id="btnDownloadPromptFile" href="#" target="_blank" download="thumbnail_prompt.txt" style="display: inline-flex; align-items: center; gap: 6px; padding: 10px 14px; font-weight: 600; border-radius: 6px; border: 1px solid var(--border); background: rgba(255, 255, 255, 0.05); color: var(--text-secondary); text-decoration: none;">
+                        <span>📥</span> Скачать .TXT
+                    </a>
+                </div>
+                <button type="button" class="btn-close-modal" onclick="closeThumbnailPromptModal()">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Completion Modal (displayed when a job completes) -->
     <div class="modal-backdrop" id="jobCompletedModal" style="display: none;" onclick="closeCompletedModal(event)">
         <div class="modal-dialog modal-dialog-completed" onclick="event.stopPropagation()">
@@ -857,6 +904,9 @@
                             </a>
                             <button type="button" class="btn-completed-action btn-edit-thumb" id="btnCompletedEditThumb" onclick="openThumbFromCompletedModal()">
                                 <span>🎨</span> Редактировать обложку
+                            </button>
+                            <button type="button" class="btn-completed-action" id="btnCompletedPrompt" onclick="openPromptFromCompletedModal()" style="border-color: rgba(251, 191, 36, 0.4); color: #fbbf24;">
+                                <span>💡</span> Промпт заставки (AI)
                             </button>
                             <button type="button" class="btn-completed-action" id="btnCompletedScript" onclick="openScriptFromCompletedModal()">
                                 <span>📝</span> Сценарий

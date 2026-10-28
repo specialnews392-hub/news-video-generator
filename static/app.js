@@ -900,6 +900,9 @@ function addToHistory(job, prepend = true) {
             <button type="button" class="btn-hist-action btn-hist-edit" onclick="event.stopPropagation(); openThumbnailModal('${job.id}')" title="Редактировать обложку">
                 🎨 Обложка
             </button>
+            <button type="button" class="btn-hist-action" onclick="event.stopPropagation(); openThumbnailPromptModal('${job.id}')" title="Промпт для арт-директора (AI)" style="color: #fbbf24; border-color: rgba(251, 191, 36, 0.35);">
+                💡 Промпт
+            </button>
             <a href="/api/download/${job.id}/video" class="btn-hist-action btn-hist-dl" onclick="event.stopPropagation()" title="Скачать видео MP4" target="_blank">
                 📹 Видео
             </a>
@@ -1981,6 +1984,83 @@ function closeResultSourcesCard() {
     }
 }
 
+// === Thumbnail Art Director Prompt Modal ===
+let currentPromptJobId = null;
+let currentPromptText = '';
+
+async function openThumbnailPromptModal(targetJobId = null) {
+    const jobId = targetJobId || currentJobId || (lastCompletedJob && lastCompletedJob.id);
+    if (!jobId) {
+        alert('Идентификатор ролика не найден');
+        return;
+    }
+    currentPromptJobId = jobId;
+
+    const modal = document.getElementById('thumbnailPromptModal');
+    const textEl = document.getElementById('modalPromptText');
+    const titleEl = document.getElementById('modalPromptTitle');
+    const downloadLink = document.getElementById('btnDownloadPromptFile');
+    const copyBtn = document.getElementById('btnCopyPromptMain');
+    const copyMini = document.getElementById('btnCopyPromptMini');
+
+    if (modal) modal.style.display = 'flex';
+    if (textEl) textEl.textContent = '⏳ Формирование профессионального ТЗ для арт-директора на основе фактуры выпуска...';
+    if (downloadLink) downloadLink.href = `/api/download/${jobId}/thumbnail-prompt`;
+    if (copyBtn) copyBtn.innerHTML = '<span>📋</span> Скопировать весь промпт';
+    if (copyMini) copyMini.textContent = '📋 Скопировать';
+
+    try {
+        const resp = await fetch(`/api/job/${jobId}/thumbnail-prompt`);
+        if (!resp.ok) {
+            throw new Error(`Ошибка загрузки промпта (${resp.status})`);
+        }
+        const data = await resp.json();
+        currentPromptText = data.prompt || '';
+        if (textEl) textEl.textContent = currentPromptText;
+        if (titleEl && data.topic) {
+            titleEl.textContent = `Промпт заставки: ${data.topic}`;
+        }
+    } catch (e) {
+        if (textEl) textEl.textContent = `Не удалось сформировать промпт: ${e.message}`;
+    }
+}
+
+function closeThumbnailPromptModal(e) {
+    if (e && e.target && e.target.id !== 'thumbnailPromptModal' && !e.target.classList.contains('modal-close') && !e.target.classList.contains('btn-close-modal')) {
+        return;
+    }
+    const modal = document.getElementById('thumbnailPromptModal');
+    if (modal) modal.style.display = 'none';
+}
+
+function copyThumbnailPrompt() {
+    if (!currentPromptText) return;
+    navigator.clipboard.writeText(currentPromptText).then(() => {
+        const copyBtn = document.getElementById('btnCopyPromptMain');
+        const copyMini = document.getElementById('btnCopyPromptMini');
+        if (copyBtn) copyBtn.innerHTML = '<span>✅</span> Скопировано!';
+        if (copyMini) copyMini.textContent = '✅ Скопировано!';
+        setTimeout(() => {
+            if (copyBtn) copyBtn.innerHTML = '<span>📋</span> Скопировать весь промпт';
+            if (copyMini) copyMini.textContent = '📋 Скопировать';
+        }, 2500);
+    }).catch(err => {
+        alert('Не удалось скопировать: ' + err);
+    });
+}
+
+function openInChatGPTWithPrompt() {
+    if (currentPromptText) {
+        navigator.clipboard.writeText(currentPromptText).then(() => {
+            window.open('https://chatgpt.com', '_blank');
+        }).catch(() => {
+            window.open('https://chatgpt.com', '_blank');
+        });
+    } else {
+        window.open('https://chatgpt.com', '_blank');
+    }
+}
+
 // === Completion Modal & Smooth Queue Transitions ===
 let lastCompletedJob = null;
 let nextQueueJob = null;
@@ -2078,6 +2158,11 @@ function openScriptFromCompletedModal() {
     currentJobId = lastCompletedJob.id;
     currentJobData = lastCompletedJob;
     openScriptModal();
+}
+
+function openPromptFromCompletedModal() {
+    if (!lastCompletedJob) return;
+    openThumbnailPromptModal(lastCompletedJob.id);
 }
 
 function openFullResultsFromModal() {

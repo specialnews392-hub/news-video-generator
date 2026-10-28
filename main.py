@@ -390,6 +390,137 @@ async def get_job_sources(job_id: str):
     raise HTTPException(status_code=404, detail="Sources not yet extracted")
 
 
+def _build_job_thumbnail_prompt(job_id: str, job: dict, script_data: dict = None, articles: list[dict] = None) -> str:
+    """Construct or load the YouTube thumbnail Art Director prompt for a job."""
+    job_dir = config.OUTPUT_DIR / job_id
+    prompt_file = job_dir / "thumbnail_prompt.txt"
+
+    # If already generated and saved on disk, reuse it unless script_data is explicitly passed
+    if prompt_file.exists() and not script_data:
+        try:
+            return prompt_file.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+    topic = job.get("topic", "")
+
+    # Try reading script_data from cache if not provided
+    if not script_data:
+        script_cache = job_dir / "script_data.json"
+        if script_cache.exists():
+            try:
+                with open(script_cache, "r", encoding="utf-8") as f_sc:
+                    script_data = json.load(f_sc)
+            except Exception:
+                pass
+
+    if not script_data:
+        script_data = job.get("script_data") or {}
+
+    title = script_data.get("title") or job.get("generated_title") or (job.get("result") or {}).get("title") or topic
+
+    # 1. Central question
+    central_q = script_data.get("central_question", "")
+    if not central_q:
+        paragraphs = script_data.get("paragraphs", [])
+        if paragraphs:
+            first_p = paragraphs[0]
+            questions = [s.strip() for s in re.split(r'(?<=[.!?…])\s+', first_p) if s.strip().endswith('?')]
+            if questions:
+                central_q = questions[0]
+        if not central_q:
+            main_lead = script_data.get("main_lead_story", "")
+            if job.get("language") == "de":
+                central_q = f"Welche konkreten Konsequenzen hat das Ereignis: {main_lead or topic}?"
+            else:
+                central_q = f"В чем реальные последствия и скрытые механизмы события: {main_lead or topic}?"
+
+    # 2. Verified facts
+    verified_facts_list = []
+    if script_data.get("claim_sources"):
+        for cs in script_data["claim_sources"][:5]:
+            c = cs.get("claim", "")
+            if c:
+                verified_facts_list.append(c)
+    elif script_data.get("verified_facts"):
+        verified_facts_list = script_data.get("verified_facts")
+
+    if not verified_facts_list:
+        sources = job.get("sources") or []
+        if not sources and articles:
+            sources = articles
+        if not sources:
+            sources_file = job_dir / "sources.json"
+            if sources_file.exists():
+                try:
+                    with open(sources_file, "r", encoding="utf-8") as f_sf:
+                        sources = json.load(f_sf).get("sources", [])
+                except Exception:
+                    pass
+        for s in sources[:6]:
+            s_title = s.get("title", "")
+            s_source = s.get("source", "СМИ")
+            if s_title:
+                verified_facts_list.append(f"[{s_source}] {s_title}")
+
+    # 3. Content and final conclusion
+    script_summary_parts = []
+    if script_data.get("main_lead_story"):
+        script_summary_parts.append(f"Сюжет: {script_data['main_lead_story']}")
+    if script_data.get("description"):
+        script_summary_parts.append(f"Суть: {script_data['description']}")
+    paragraphs = script_data.get("paragraphs", [])
+    if paragraphs and len(paragraphs) >= 2:
+        last_p = paragraphs[-1].strip()
+        if len(last_p) > 280:
+            last_p = last_p[:280] + "..."
+        script_summary_parts.append(f"Итоговый вывод: {last_p}")
+
+    script_summary = "\n".join(script_summary_parts) if script_summary_parts else (script_data.get("description") or topic)
+
+    prompt = thumbnail_generator.build_thumbnail_art_director_prompt(
+        topic=topic,
+        title=title,
+        verified_facts=verified_facts_list,
+        central_question=central_q,
+        script_summary=script_summary,
+    )
+
+    try:
+        job_dir.mkdir(parents=True, exist_ok=True)
+        with open(prompt_file, "w", encoding="utf-8") as f:
+            f.write(prompt)
+    except Exception as e:
+        logger.warning(f"Failed to write thumbnail_prompt.txt: {e}")
+
+    return prompt
+
+
+@app.get("/api/job/{job_id}/thumbnail-prompt")
+async def get_job_thumbnail_prompt(job_id: str):
+    """Retrieve formatted YouTube thumbnail Art Director prompt for the job."""
+    if job_id not in jobs:
+        job_dir = config.OUTPUT_DIR / job_id
+        if not job_dir.exists():
+            raise HTTPException(status_code=404, detail="Job not found")
+        job = {"id": job_id, "topic": "YouTube News"}
+    else:
+        job = jobs[job_id]
+
+    prompt = job.get("thumbnail_prompt") or (job.get("result") or {}).get("thumbnail_prompt")
+    if not prompt:
+        prompt = _build_job_thumbnail_prompt(job_id, job, script_data=job.get("script_data"))
+        job["thumbnail_prompt"] = prompt
+
+    return {
+        "job_id": job_id,
+        "prompt": prompt,
+        "title": job.get("generated_title") or (job.get("result") or {}).get("title", ""),
+        "topic": job.get("topic", ""),
+    }
+
+
+
 @app.get("/api/gemini/tts-status")
 async def get_gemini_tts_status():
     """Check Gemini TTS model availability and quota status across API keys."""
@@ -594,6 +725,11 @@ async def download_file(job_id: str, file_type: str):
         path = result.get("script_path")
     elif file_type == "subtitles":
         path = result.get("subtitles_path")
+    elif file_type == "thumbnail-prompt":
+        prompt_path = config.OUTPUT_DIR / job_id / "thumbnail_prompt.txt"
+        if not prompt_path.exists():
+            _build_job_thumbnail_prompt(job_id, job)
+        path = str(prompt_path)
     else:
         raise HTTPException(status_code=400, detail="Invalid file type")
 
@@ -610,7 +746,13 @@ async def download_file(job_id: str, file_type: str):
         if not path or not Path(path).exists():
             raise HTTPException(status_code=404, detail="File not found")
     
-    media_type = "image/jpeg" if file_type == "thumbnail" else "application/octet-stream"
+    if file_type == "thumbnail":
+        media_type = "image/jpeg"
+    elif file_type == "thumbnail-prompt":
+        media_type = "text/plain; charset=utf-8"
+    else:
+        media_type = "application/octet-stream"
+
     return FileResponse(
         path,
         filename=Path(path).name,
@@ -1930,6 +2072,11 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
         job["thumbnail_hook_ru"] = hook_ru
         job["main_lead_story"] = main_lead
         job["has_script"] = True
+
+        # Build and store YouTube thumbnail Art Director prompt
+        thumb_art_prompt = _build_job_thumbnail_prompt(job_id, job, script_data, articles)
+        job["thumbnail_prompt"] = thumb_art_prompt
+        job["script_data"]["thumbnail_prompt"] = thumb_art_prompt
         
         # Log lead story & clickbait title prominently
         logger.info("\n" + "="*70)
@@ -2163,6 +2310,18 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
         # ====== PREPARE SLIDES METADATA ======
         _check_cancelled()
         segment_timings = tts_result.get("segment_timings", [])
+        total_audio_ms = sum(s.get("duration_ms", 0) for s in segment_timings)
+        dur_sec = total_audio_ms / 1000.0
+        dur_min = int(dur_sec // 60)
+        dur_rem = int(dur_sec % 60)
+        dur_str = f"{dur_min} мин {dur_rem:02d} сек"
+        job["narration_duration_sec"] = round(dur_sec, 1)
+        job["narration_duration_str"] = dur_str
+        logger.info(f"[{job_id}] ⏱️ Хронометраж озвучки: {dur_str} ({dur_sec:.1f} сек, {len(segment_timings)} сегментов)")
+        if not req.is_preview:
+            if dur_sec < 540 or dur_sec > 800:
+                logger.warning(f"[{job_id}] ⚠️ Хронометраж ({dur_str}) выходит за рамки целевого диапазона 10–12 минут (1650 слов @ 150 wpm)")
+
         slides_data = []
         for s_idx, s_path in enumerate(image_paths):
             dur_ms = segment_timings[s_idx]["duration_ms"] if (s_idx < len(segment_timings)) else 5000
@@ -2301,7 +2460,9 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
             "tts_engine": tts_engine_name,
             "sources": sources_payload,
             "sources_summary": job.get("sources_summary", {}),
+            "thumbnail_prompt": job.get("thumbnail_prompt") or _build_job_thumbnail_prompt(job_id, job, script_data),
         }
+        job["thumbnail_prompt"] = job["result"]["thumbnail_prompt"]
         
         _update_job(job, "completed", 100, "Готово!", "completed",
                     detail=f"Видео: {video_path.name}")

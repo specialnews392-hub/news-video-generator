@@ -139,6 +139,7 @@ async def notify_job_completed(job_id: str, job: dict):
     video_url = f"{server_url}/api/download/{job_id}/video"
     thumb_url = f"{server_url}/api/download/{job_id}/thumbnail"
     edit_url = f"{server_url}/?edit_thumb={job_id}"
+    prompt_url = f"{server_url}/api/download/{job_id}/thumbnail-prompt"
 
     caption = (
         "🎬 <b>Готов новый видеоролик!</b>\n\n"
@@ -147,6 +148,7 @@ async def notify_job_completed(job_id: str, job: dict):
         f"⏱ <b>Хронометраж:</b> ~{approx_min} мин ({script_chars:,} знаков, {segments} слайдов)\n\n"
         f"📥 <a href=\"{video_url}\">Скачать видео (MP4)</a>\n"
         f"🖼 <a href=\"{thumb_url}\">Скачать обложку (JPG)</a>\n"
+        f"💡 <a href=\"{prompt_url}\">Промпт для заставки (AI)</a>\n"
         f"✏️ <a href=\"{edit_url}\">Редактировать обложку</a>"
     )
 
@@ -156,7 +158,10 @@ async def notify_job_completed(job_id: str, job: dict):
             {"text": "🖼 Обложка", "url": thumb_url},
         ],
         [
-            {"text": "✏️ Редактировать обложку", "url": edit_url},
+            {"text": "💡 Промпт заставки", "url": prompt_url},
+            {"text": "✏️ Редактировать", "url": edit_url},
+        ],
+        [
             {"text": "🌐 Открыть сайт", "url": server_url},
         ]
     ]
