@@ -25,6 +25,9 @@ import httpx
 from pydantic import BaseModel
 
 import config
+from services.script_quality import (
+    measure_narration_duration, validate_narration_duration, count_words, word_targets,
+)
 from services import (
     news_fetcher, script_generator, tts_engine,
     image_searcher, image_analyzer, video_compiler,
@@ -237,6 +240,8 @@ async def start_generation(req: VideoRequest, background_tasks: BackgroundTasks)
         "language": req.language,
         "voice_id": req.voice_id,
         "voice_rate": req.voice_rate,
+        "is_preview": req.is_preview,
+        "target_length": req.target_length,
         "theme": req.theme,
         "ken_burns": req.ken_burns,
         "transitions": req.transitions,
@@ -281,6 +286,8 @@ async def start_batch_generation(req: BatchVideoRequest, background_tasks: Backg
             "language": req.language,
             "voice_id": req.voice_id,
             "voice_rate": req.voice_rate,
+            "is_preview": req.is_preview,
+            "target_length": req.target_length,
             "theme": req.theme,
             "ken_burns": req.ken_burns,
             "transitions": req.transitions,
@@ -598,6 +605,7 @@ async def retry_job(job_id: str):
         theme=job.get("theme", "default"),
         voice_rate=job.get("voice_rate", "+0%"),
         target_length=job.get("target_length", 15000),
+        is_preview=job.get("is_preview", False),
         skip_image_analysis=job.get("skip_image_analysis", True),
         ken_burns=job.get("ken_burns", False),
         transitions=job.get("transitions", True),
@@ -1805,6 +1813,7 @@ async def _resume_approved_video(job_id: str):
             segment_timings = [{"duration_ms": s["duration_ms"]} for s in slides]
             audio_dir = config.TEMP_DIR / job_id / "audio"
             narration = audio_dir / "narration.mp3"
+            script_data = job.get("script_data") or {}
             if not narration.is_file() or narration.stat().st_size == 0:
                 _update_job(job, "running", 75, "Синтез недостающей озвучки...", "tts_started")
                 script_text = script_data.get("script") or "\n\n".join(s.get("text", "") for s in slides)
@@ -1823,6 +1832,8 @@ async def _resume_approved_video(job_id: str):
                 job["slides"] = slides
                 _save_jobs()
 
+            narration_seconds = await asyncio.to_thread(measure_narration_duration, narration)
+            validate_narration_duration(narration_seconds, job.get("is_preview", False))
             subtitles_ass = audio_dir / "subtitles.ass"
             subtitles_srt = audio_dir / "subtitles.srt"
             subtitles = subtitles_ass if subtitles_ass.exists() and subtitles_ass.stat().st_size > 0 else (subtitles_srt if subtitles_srt.exists() and subtitles_srt.stat().st_size > 0 else None)
@@ -2003,8 +2014,13 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
                 with open(script_cache_file, "r", encoding="utf-8") as f_sc:
                     cached_sd = json.load(f_sc)
                 if cached_sd.get("segments") and cached_sd.get("title") and len(cached_sd.get("segments", [])) > 0:
-                    script_data = cached_sd
-                    logger.info(f"[{job_id}] ♻️ Повторное использование сценария из кэша ({len(script_data['segments'])} слайдов). Запрос к Gemini AI пропущен!")
+                    cached_text = cached_sd.get("script") or "\n\n".join(cached_sd.get("paragraphs") or cached_sd["segments"])
+                    minimum_words, _ = word_targets(req.target_length)
+                    if cached_sd.get("status", "ready") == "ready" and (req.is_preview or count_words(cached_text) >= minimum_words):
+                        script_data = cached_sd
+                        logger.info(f"[{job_id}] Reusing validated script cache ({count_words(cached_text)} words)")
+                    else:
+                        logger.warning(f"[{job_id}] Cached script fails length/status checks; regenerating")
             except Exception as e:
                 logger.warning(f"Failed to read cached script_data.json: {e}")
 
@@ -2265,6 +2281,11 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
                     continue
 
         image_paths = await img_download_task
+        narration_seconds = await asyncio.to_thread(
+            measure_narration_duration, tts_result["combined_audio"]
+        )
+        job["narration_duration_sec"] = round(narration_seconds, 1)
+        validate_narration_duration(narration_seconds, req.is_preview)
         
         tts_engine_name = tts_result.get("engine", "unknown")
         downloaded_count = sum(1 for p in image_paths if p)
@@ -2310,17 +2331,13 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
         # ====== PREPARE SLIDES METADATA ======
         _check_cancelled()
         segment_timings = tts_result.get("segment_timings", [])
-        total_audio_ms = sum(s.get("duration_ms", 0) for s in segment_timings)
-        dur_sec = total_audio_ms / 1000.0
+        dur_sec = narration_seconds
         dur_min = int(dur_sec // 60)
         dur_rem = int(dur_sec % 60)
         dur_str = f"{dur_min} мин {dur_rem:02d} сек"
         job["narration_duration_sec"] = round(dur_sec, 1)
         job["narration_duration_str"] = dur_str
         logger.info(f"[{job_id}] ⏱️ Хронометраж озвучки: {dur_str} ({dur_sec:.1f} сек, {len(segment_timings)} сегментов)")
-        if not req.is_preview:
-            if dur_sec < 540 or dur_sec > 800:
-                logger.warning(f"[{job_id}] ⚠️ Хронометраж ({dur_str}) выходит за рамки целевого диапазона 10–12 минут (1650 слов @ 150 wpm)")
 
         slides_data = []
         for s_idx, s_path in enumerate(image_paths):

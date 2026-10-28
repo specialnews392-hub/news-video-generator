@@ -9,6 +9,7 @@ from google import genai
 from google.genai import types
 
 import config
+from services.script_quality import ScriptQualityError, count_words, word_targets
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +43,7 @@ async def generate_script(
     
     # Calculate word targets: 10-12 minutes at ~150 words/minute
     words_per_minute = 150
-    if target_length:
-        target_words = max(1100, int(target_length / 8.0))
-    else:
-        target_words = 1650  # ~11 minutes narration
+    minimum_words, target_words = word_targets(target_length)
     
     # Prepare articles text with explicit IDs, source attribution, links and character counts
     articles_text = ""
@@ -83,7 +81,7 @@ async def generate_script(
 Предыдущие заголовки:
 {prev_titles_str}
 Целевая длительность: 10–12 минут.
-Измеренная скорость выбранного диктора: {words_per_minute} слов в минуту.
+Ориентировочная, не измеренная скорость диктора: {words_per_minute} слов в минуту. Реальный хронометраж проверяется после озвучки.
 Целевой объём: {target_words} слов.
 
 ПЕРВЫЙ ЭТАП — РЕДАКТОРСКАЯ ПРОВЕРКА:
@@ -188,7 +186,7 @@ async def generate_script(
 Предыдущие заголовки (не повторять клише):
 {prev_titles_str}
 Целевая длительность: 10–12 минут.
-Измеренная скорость выбранного диктора: {words_per_minute} слов в минуту.
+Ориентировочная, не измеренная скорость диктора: {words_per_minute} слов в минуту. Реальный хронометраж проверяется после озвучки.
 Целевой объём: {target_words} слов.
 
 ПЕРВЫЙ ЭТАП — РЕДАКТОРСКАЯ ПРОВЕРКА:
@@ -257,11 +255,23 @@ async def generate_script(
       "visual": "Документ, карта, лицо крупный план или конкретное событие",
       "purpose": "Что этот визуал помогает понять",
       "source_ids": ["art_1"]
-    ]
+    }}
+  ]
 }}"""
 
     if _is_retry:
-        prompt += "\n\nВНИМАНИЕ: Это повторный расширенный запрос после сбора дополнительной информации. Сформируй полноценный, глубокий сценарий с параметром status='ready' на основе всех предоставленных материалов."
+        prompt += "\n\nЭто повторный запрос после дополнительного поиска. Если фактуры всё ещё недостаточно, честно верни needs_research."
+
+    prompt += f"""\n\nОБЯЗАТЕЛЬНЫЙ КОНТРОЛЬ ОБЪЁМА:
+В paragraphs должно быть минимум {minimum_words} слов дикторского текста,
+цель — {target_words} слов. Метаданные, заголовки и источники не учитываются.
+Распредели объём между вступлением (5%), событием и хронологией (15%),
+механизмом (20%), масштабом и сравнением (20%), последствиями (20%),
+ограничениями и альтернативным объяснением (15%), выводом (5%).
+Адаптируй блоки к фактам темы. Не добавляй выдуманные сведения или повторы.
+При нехватке фактуры верни needs_research вместо короткого готового сценария.
+Приоритет — минимум 10 минут; ориентир 10–12 минут не является верхним ограничением.
+"""
 
     # Try with aggressive key rotation - try many keys and fallback models
     models_to_try = [config.GEMINI_MODEL] + config.GEMINI_FALLBACK_MODELS
@@ -280,21 +290,49 @@ async def generate_script(
                 
                 logger.info(f"Trying model={model_name}, key #{config._key_index % total_keys}")
                 
-                response = await asyncio.to_thread(
-                    client.models.generate_content,
-                    model=model_name,
-                    contents=prompt,
-                    config=genai.types.GenerateContentConfig(
-                        temperature=0.85,
-                        max_output_tokens=16384,
-                        response_mime_type="application/json",
-                    ),
-                )
-                
-                result_text = response.text.strip()
-                
-                # Parse JSON
-                result = json.loads(result_text)
+                request_prompt = prompt
+                # Bound editorial retries independently of API/key retries.
+                for revision in range(3):
+                    response = await asyncio.to_thread(
+                        client.models.generate_content,
+                        model=model_name,
+                        contents=request_prompt,
+                        config=genai.types.GenerateContentConfig(
+                            temperature=0.85,
+                            max_output_tokens=16384,
+                            response_mime_type="application/json",
+                        ),
+                    )
+                    result_text = response.text.strip()
+                    # Recovered JSON must pass exactly the same checks.
+                    try:
+                        result = json.loads(result_text)
+                    except json.JSONDecodeError:
+                        import re
+                        match = re.search(r'\{[\s\S]*\}', result_text)
+                        if not match:
+                            raise
+                        result = json.loads(match.group())
+                    if result.get("status") == "needs_research":
+                        break
+                    spoken = result.get("paragraphs") or result.get("segments") or []
+                    actual_words = count_words("\n".join(spoken))
+                    if actual_words >= minimum_words:
+                        break
+                    if revision == 2:
+                        raise ScriptQualityError(
+                            f"Сценарий не принят: {actual_words} слов вместо минимум "
+                            f"{minimum_words} после двух доработок. Нужна дополнительная фактура."
+                        )
+                    logger.warning(f"Short script: {actual_words}/{minimum_words} words; revision {revision + 1}/2")
+                    request_prompt = prompt + (
+                        f"\nПредыдущий ответ содержит только {actual_words} слов дикторского текста. "
+                        f"Переработай его в полный сценарий на {target_words} слов, минимум {minimum_words}. "
+                        "Раскрой недостающие объяснения и факты из источников; не повторяй выводы. "
+                        "Верни весь обновлённый JSON, включая согласованные источники и визуальный план. "
+                        "Если фактуры недостаточно — needs_research. Предыдущий ответ:\n"
+                        + json.dumps(result, ensure_ascii=False)
+                    )
                 
                 # Check if model requested additional research
                 if result.get("status") == "needs_research" and not _is_retry:
@@ -313,7 +351,8 @@ async def generate_script(
                                 )
                                 for ea in extra_articles:
                                     if ea.get("link") and ea.get("link") not in existing_links:
-                                        articles.append(ea)
+                                        # Keep supplemental material inside the 15-source prompt limit.
+                                        articles.insert(1, ea)
                                         existing_links.add(ea.get("link"))
                                         extra_found = True
                             except Exception as ex_fetch:
@@ -328,6 +367,11 @@ async def generate_script(
                                 previous_titles=previous_titles,
                                 _is_retry=True,
                             )
+                if result.get("status") == "needs_research":
+                    raise ScriptQualityError(
+                        "Недостаточно фактуры для полного выпуска: "
+                        + str(result.get("research_gaps", []))
+                    )
                 
                 # Extract paragraphs or segments
                 paragraphs = result.get("paragraphs", [])
@@ -346,6 +390,11 @@ async def generate_script(
                 # Clean paragraphs
                 paragraphs = [p.strip() for p in paragraphs if p.strip()]
                 full_script = "\n\n".join(paragraphs)
+                actual_words = count_words(full_script)
+                if actual_words < minimum_words:
+                    raise ScriptQualityError(f"Сценарий слишком короткий: {actual_words}/{minimum_words} слов.")
+                result["word_count"] = actual_words
+                result["minimum_words"] = minimum_words
                 
                 # Derive sentence-level visual segments for video slides
                 import re
@@ -453,18 +502,10 @@ async def generate_script(
                 logger.info(f"Generated script: {script_len} chars, {len(paragraphs)} paragraphs, {len(segments)} visual slides (model={model_name})")
                 return result
                 
+            except ScriptQualityError:
+                raise
             except json.JSONDecodeError as e:
                 logger.warning(f"JSON parse error (model={model_name}, key_attempt={key_attempt + 1}): {e}")
-                try:
-                    import re
-                    json_match = re.search(r'\{[\s\S]*\}', result_text)
-                    if json_match:
-                        result = json.loads(json_match.group())
-                        result["script"] = "\n\n".join(result.get("segments", []))
-                        if result.get("segments"):
-                            return result
-                except:
-                    pass
                 last_error = e
                     
             except Exception as e:
