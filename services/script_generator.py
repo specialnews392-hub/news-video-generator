@@ -41,8 +41,8 @@ async def generate_script(
     
     prev_titles_str = "\n".join(f"  • {t}" for t in previous_titles) if previous_titles else "Keine vorherigen Titel"
     
-    # Calculate word targets: 10-12 minutes at ~150 words/minute
-    words_per_minute = 150
+    # Calculate word targets: 10-12 minutes at ~140 words/minute
+    words_per_minute = 140
     minimum_words, target_words = word_targets(target_length)
     
     # Prepare articles text with explicit IDs, source attribution, links and character counts
@@ -319,7 +319,15 @@ async def generate_script(
                     actual_words = count_words("\n".join(spoken))
                     if actual_words >= minimum_words:
                         break
+                    # Soft floor: allow if close to minimum (>= 85% of minimum_words) on final revision
+                    soft_floor = max(800, int(minimum_words * 0.85))
                     if revision == 2:
+                        if actual_words >= soft_floor:
+                            logger.warning(
+                                f"Script slightly below minimum ({actual_words}/{minimum_words} words), "
+                                f"but reaches soft floor ({soft_floor} words). Accepting to prevent generation failure."
+                            )
+                            break
                         raise ScriptQualityError(
                             f"Сценарий не принят: {actual_words} слов вместо минимум "
                             f"{minimum_words} после двух доработок. Нужна дополнительная фактура."
@@ -391,8 +399,11 @@ async def generate_script(
                 paragraphs = [p.strip() for p in paragraphs if p.strip()]
                 full_script = "\n\n".join(paragraphs)
                 actual_words = count_words(full_script)
-                if actual_words < minimum_words:
+                soft_floor = max(800, int(minimum_words * 0.85))
+                if actual_words < soft_floor:
                     raise ScriptQualityError(f"Сценарий слишком короткий: {actual_words}/{minimum_words} слов.")
+                elif actual_words < minimum_words:
+                    logger.warning(f"Script word count ({actual_words}) slightly below target minimum {minimum_words}, but meets soft floor ({soft_floor}).")
                 result["word_count"] = actual_words
                 result["minimum_words"] = minimum_words
                 

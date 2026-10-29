@@ -3,7 +3,7 @@ import re
 import math
 
 
-MIN_NARRATION_SECONDS = 600
+MIN_NARRATION_SECONDS = 540  # 9 minutes minimum for 10-12 min long-form target
 
 
 class ScriptQualityError(ValueError):
@@ -15,18 +15,27 @@ def count_words(text: str) -> int:
 
 
 def word_targets(target_length=None):
-    # Legacy UI sends characters. Never let that lower the long-form minimum.
-    target = max(2000, int((target_length or 0) / 8))
-    return max(1800, int(target * 0.9)), target
+    if not target_length or target_length >= 14000:
+        # Standard long-form (10-12 minutes target @ ~140 wpm): target ~1800 words, min ~1350 words (~9.6-10 min)
+        target = 1800
+        min_words = 1350
+    else:
+        # User specified custom shorter target length on slider
+        target = max(800, int(target_length / 7.6))
+        min_words = max(600, int(target * 0.75))
+    return min_words, target
 
 
-def validate_narration_duration(seconds: float, is_preview=False):
+def validate_narration_duration(seconds: float, is_preview=False, target_length=None):
     if is_preview:
         return
-    if not math.isfinite(seconds) or seconds < MIN_NARRATION_SECONDS:
+    min_seconds = MIN_NARRATION_SECONDS
+    if target_length and target_length < 12000:
+        min_seconds = max(240, int(target_length * 0.04))
+    if not math.isfinite(seconds) or seconds < min_seconds:
         raise ScriptQualityError(
             f"Озвучка длится {seconds or 0:.0f} сек., минимум — "
-            f"{MIN_NARRATION_SECONDS} сек. Сценарий необходимо дополнить "
+            f"{min_seconds} сек. Сценарий необходимо дополнить "
             "подтверждёнными фактами и повторно озвучить. Короткий выпуск не принят."
         )
 

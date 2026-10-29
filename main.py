@@ -1833,7 +1833,7 @@ async def _resume_approved_video(job_id: str):
                 _save_jobs()
 
             narration_seconds = await asyncio.to_thread(measure_narration_duration, narration)
-            validate_narration_duration(narration_seconds, job.get("is_preview", False))
+            validate_narration_duration(narration_seconds, job.get("is_preview", False), target_length=job.get("target_length"))
             subtitles_ass = audio_dir / "subtitles.ass"
             subtitles_srt = audio_dir / "subtitles.srt"
             subtitles = subtitles_ass if subtitles_ass.exists() and subtitles_ass.stat().st_size > 0 else (subtitles_srt if subtitles_srt.exists() and subtitles_srt.stat().st_size > 0 else None)
@@ -2285,7 +2285,7 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
             measure_narration_duration, tts_result["combined_audio"]
         )
         job["narration_duration_sec"] = round(narration_seconds, 1)
-        validate_narration_duration(narration_seconds, req.is_preview)
+        validate_narration_duration(narration_seconds, req.is_preview, target_length=req.target_length)
         
         tts_engine_name = tts_result.get("engine", "unknown")
         downloaded_count = sum(1 for p in image_paths if p)
