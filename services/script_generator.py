@@ -147,6 +147,13 @@ async def generate_script(
 — Проверь грамматику, идиомы, случайные символы, повторы и произносимость.
 — Не включай редакторские пометки в текст диктора.
 
+ВИЗУАЛЬНЫЙ ПЛАН:
+— Для КАЖДОГО абзаца укажи paragraph_index (нумерация с нуля), visual и search_query.
+— Запрос содержит конкретный видимый объект, действие и страну, 4–9 слов на языке сценария.
+— Не ищи метафоры буквально. Не подставляй детей, животных или политиков без связи с абзацем.
+— Для чисел и сравнений используй текстовую карточку, а не чужой график из поиска.
+— Не приписывай стоковому фото статус фотографии конкретного события.
+
 ПЕРЕД ВЫДАЧЕЙ:
 Проверь, выполняет ли сценарий обещание заголовка; отвечает ли финал на центральный вопрос; содержит ли каждый блок новую информацию; подтверждены ли существенные утверждения.
 
@@ -169,7 +176,8 @@ async def generate_script(
   "visual_plan": [
     {{
       "paragraph_index": 0,
-      "visual": "Dokument, Karte, Grafik oder Person Nahaufnahme",
+      "visual": "Konkretes sichtbares Motiv passend zu diesem Absatz",
+      "search_query": "Konkrete deutsche Suchphrase: Person/Institution, Handlung, Ort",
       "purpose": "Was dieser Visual hilft zu verstehen",
       "source_ids": ["art_1"]
     }}
@@ -252,7 +260,8 @@ async def generate_script(
   "visual_plan": [
     {{
       "paragraph_index": 0,
-      "visual": "Документ, карта, лицо крупный план или конкретное событие",
+      "visual": "Конкретный объект или событие из этого абзаца",
+      "search_query": "Поисковая фраза на языке сюжета: объект, действие, страна",
       "purpose": "Что этот визуал помогает понять",
       "source_ids": ["art_1"]
     }}
@@ -407,70 +416,12 @@ async def generate_script(
                 result["word_count"] = actual_words
                 result["minimum_words"] = minimum_words
                 
-                # Derive sentence-level visual segments for video slides
-                import re
-                segments = []
-                for p in paragraphs:
-                    sents = [s.strip() for s in re.split(r'(?<=[.!?…])\s+', p) if s.strip()]
-                    for sent in sents:
-                        if len(sent) > 160:
-                            parts = [pt.strip() for pt in re.split(r'(?<=[,;—–:])\s+', sent) if pt.strip()]
-                            if len(parts) > 1:
-                                cur = ""
-                                for pt in parts:
-                                    if len(cur) + len(pt) < 140:
-                                        cur = (cur + " " + pt).strip()
-                                    else:
-                                        if cur:
-                                            segments.append(cur)
-                                        cur = pt
-                                if cur:
-                                    segments.append(cur)
-                            else:
-                                segments.append(sent)
-                        else:
-                            segments.append(sent)
-                
-                # Ensure queries from search_queries or visual_plan
-                queries = result.get("search_queries", [])
-                if not queries and result.get("visual_plan"):
-                    for vp in result["visual_plan"]:
-                        v_desc = vp.get("visual", "").strip()
-                        if v_desc:
-                            queries.append(v_desc)
-                queries = [q.strip() for q in queries if q.strip()]
-                
-                # Align queries with segments
-                while len(queries) < len(segments):
-                    fallback_idx = len(queries)
-                    seg_text = segments[fallback_idx] if fallback_idx < len(segments) else topic
-                    clean_words = [w.strip(".,;:!?\"'«»()[]") for w in seg_text.split() if len(w) > 3]
-                    
-                    if lang == "de":
-                        # In German, capitalized words are nouns/names
-                        nouns = [w for w in clean_words if w and w[0].isupper() and w.lower() not in {"dass", "wenn", "oder", "aber", "auch", "eine", "einer", "eines", "dieser", "diese", "dieses", "sein", "ihre", "nach", "fuer", "ueber", "unter"}]
-                        if len(nouns) >= 2:
-                            queries.append(f"{' '.join(nouns[:3])} Deutschland")
-                        else:
-                            de_fallbacks = [
-                                f"{topic} Deutschland Politik",
-                                f"{topic} Bundestag Debatte",
-                                f"{topic} Pressekonferenz",
-                                f"{topic} Aktuell Nachrichten",
-                                f"{topic} Regierung Berlin",
-                            ]
-                            queries.append(de_fallbacks[fallback_idx % len(de_fallbacks)])
-                    elif lang == "ru":
-                        ru_fallbacks = [
-                            f"{topic} новости события",
-                            f"{topic} репортаж крупный план",
-                            f"{topic} пресс-конференция",
-                            f"{topic} заявление политики",
-                        ]
-                        queries.append(ru_fallbacks[fallback_idx % len(ru_fallbacks)])
-                    else:
-                        queries.append(f"{topic} news report")
-                
+                from services.visual_plan import build_visual_segments
+                segments, queries = build_visual_segments(
+                    paragraphs, result.get("visual_plan", []), topic
+                )
+                result["visual_plan_version"] = 2
+
                 # Enforce title uniqueness and sanitize repetitive cliches
                 raw_title = result.get("title", "").strip()
                 cliche_triggers = [

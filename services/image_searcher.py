@@ -483,152 +483,82 @@ async def validate_candidate_images(
 
 
 async def search_and_download_images(
-    queries: list[str],
-    output_dir: str | Path,
-    target_total: int = 0,
-    progress_callback = None,
-    topic: str = "",
-    title: str = "",
+    queries: list[str], output_dir: str | Path, target_total: int = 0,
+    progress_callback=None, topic: str = "", title: str = "",
+    segments: list[str] = None,
 ) -> list[str]:
-    """
-    Search images for each segment and download them concurrently (Semaphore=6).
-    Guarantees:
-    1. Zero duplicate images (tracks both URLs and content MD5 hashes globally).
-    2. Zero empty slots.
-    3. Diverse thematic queries per segment.
-    """
-    from services.query_helper import (
-        sanitize_segment_query,
-        build_thematic_query_pool,
-    )
-    
+    """Exactly one verified image or narration card per segment, in order."""
+    from services.image_analyzer import analyze_image_file
+    from services.visual_plan import search_queries, make_text_card
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    num_segments = len(queries)
-    if num_segments == 0:
-        return []
+    if segments is None or len(segments) != len(queries):
+        raise ValueError("Image selection requires one narration context per query")
+    results = [None] * len(segments)
+    manifest = [None] * len(segments)
+    semaphore = asyncio.Semaphore(2)
+    completed = 0
+    service_errors = 0
+    query_cache = {}
+    used_urls = set()
 
-    images_per_segment = 1 if (num_segments >= 80 or num_segments <= 8) else max(2, 110 // max(num_segments, 1))
-    concurrency = 6
-    _DEAD_DOMAINS.clear()
-    
-    # Global tracking sets for the entire job run
-    job_used_hashes: set[str] = set()
-    job_used_urls: set[str] = set()
-    
-    # Generate backup pool of diverse thematic queries in advance
-    query_pool = build_thematic_query_pool(topic=topic, title=title, count=max(60, num_segments))
-    
-    sem = asyncio.Semaphore(concurrency)
-    completed_count = 0
-    results: list[list[str]] = [[] for _ in range(num_segments)]
+    async def candidates(query):
+        if query not in query_cache:
+            query_cache[query] = asyncio.create_task(search_images(query, count_per_source=4))
+        return await query_cache[query]
 
-    async def _handle_segment(idx: int, query: str):
-        nonlocal completed_count
-        async with sem:
-            clean_q = sanitize_segment_query(query, topic=topic, title=title, index=idx)
-            paths = []
-            
-            # Query attempts (primary, then simplified, then pooled thematic)
-            candidate_queries = [clean_q]
-            simple_q = " ".join([w for w in clean_q.split() if len(w) > 2][:3])
-            if simple_q and simple_q != clean_q:
-                candidate_queries.append(simple_q)
-            if query_pool:
-                candidate_queries.append(query_pool[idx % len(query_pool)])
-                candidate_queries.append(query_pool[(idx + 17) % len(query_pool)])
-
+    async def select(idx, context):
+        nonlocal completed, service_errors
+        async with semaphore:
+            attempts = []
+            chosen = None
+            seen = set()
             try:
-                for q_attempt in candidate_queries:
-                    if len(paths) >= images_per_segment:
-                        break
-                    
-                    images = await search_images(q_attempt, count_per_source=15)
-                    for img in images:
-                        if len(paths) >= images_per_segment:
+                # Data illustrations require verified data, not arbitrary web charts.
+                card_intent = bool(re.search(r'chart|diagram|grafik|tabelle|график|диаграм|таблиц|карточк|text.?card', queries[idx], re.I))
+                if not card_intent and service_errors < 3:
+                    for query in search_queries(queries[idx], topic, context):
+                        if chosen or service_errors >= 3:
                             break
-                        u = img.get("url")
-                        if not u or u in job_used_urls:
-                            continue
-                        
-                        ext = ".jpg"
-                        if ".png" in u.lower():
-                            ext = ".png"
-                        elif ".webp" in u.lower():
-                            ext = ".webp"
-                        
-                        save_path = output_dir / f"slide_{idx:03d}_{len(paths):02d}{ext}"
-                        
-                        # Download with strict hash deduplication
-                        if await download_image(u, save_path, forbidden_hashes=job_used_hashes):
-                            h = compute_image_hash(save_path)
-                            if h and h not in job_used_hashes:
-                                job_used_hashes.add(h)
-                                job_used_urls.add(u)
-                                paths.append(str(save_path))
-                            else:
-                                save_path.unlink(missing_ok=True)
-                
-                results[idx] = paths
-            except Exception as e:
-                logger.warning(f"Error downloading segment {idx} ('{query}'): {e}")
-                results[idx] = []
-            finally:
-                completed_count += 1
-                if progress_callback:
-                    log_msg = f"[{completed_count}/{num_segments}] Фото: '{query[:35]}...'"
-                    progress_callback(log_msg)
-                await asyncio.sleep(0.04)
+                        checked = 0
+                        available = await candidates(query)
+                        # Prefer fresh photos, but never trade relevance for uniqueness.
+                        available = sorted(available, key=lambda item: item.get('url') in used_urls)
+                        for item in available:
+                            url = item.get('url')
+                            if not url or url in seen:
+                                continue
+                            seen.add(url)
+                            if checked >= 3:
+                                break
+                            checked += 1
+                            path = output_dir / f'candidate_{idx:03d}_{len(seen):02d}.jpg'
+                            if not await download_image(url, path, fallback_url=item.get('fallback_url')):
+                                continue
+                            verdict = await analyze_image_file(path, context, topic)
+                            attempts.append({'query': query, 'url': url, **verdict})
+                            if verdict.get('status') == 'unverified':
+                                service_errors += 1
+                                break
+                            service_errors = 0
+                            if verdict.get('status') == 'approved' and verdict.get('relevant') is True and verdict.get('score', 0) >= 7:
+                                chosen = str(path)
+                                used_urls.add(url)
+                                manifest[idx] = {'segment_index': idx, 'kind': 'photo', 'path': chosen,
+                                                 'source_url': url, 'query': query, 'attempts': attempts}
+                                break
+            except Exception as exc:
+                logger.warning(f'Image selection failed for segment {idx}: {type(exc).__name__}')
+            if chosen is None:
+                chosen = make_text_card(output_dir / f'card_{idx:03d}.png', topic, context)
+                manifest[idx] = {'segment_index': idx, 'kind': 'text_card', 'path': chosen,
+                                 'reason': 'No verified suitable photo', 'attempts': attempts}
+            results[idx] = chosen
+            completed += 1
+            if progress_callback:
+                progress_callback(f'[{completed}/{len(segments)}] Проверен визуал: {manifest[idx]["kind"]}')
 
-    tasks = [_handle_segment(i, q) for i, q in enumerate(queries)]
-    await asyncio.gather(*tasks)
-
-    # Collect all uniquely downloaded images
-    all_downloaded = []
-    for paths in results:
-        for p in paths:
-            if p and Path(p).exists() and Path(p).is_file():
-                try:
-                    if Path(p).stat().st_size > 5000:
-                        all_downloaded.append(str(Path(p).resolve()))
-                except Exception:
-                    pass
-
-    all_downloaded = list(dict.fromkeys(all_downloaded))
-    logger.info(f"Pool size: {len(all_downloaded)} unique images downloaded for {num_segments} segments")
-
-    # In case any segment failed all online searches, fill gap with offset from pool
-    missing_count = 0
-    for idx in range(num_segments):
-        if not results[idx]:
-            missing_count += 1
-            borrowed = None
-            if all_downloaded:
-                # Use large prime stride to avoid adjacent slides being identical
-                borrowed = all_downloaded[(idx * 17 + 5) % len(all_downloaded)]
-
-            if borrowed:
-                results[idx] = [borrowed]
-                logger.info(f"Segment {idx} filled with photo: {Path(borrowed).name}")
-
-    if missing_count > 0:
-        logger.info(f"Filled {missing_count} segments with valid photos. Total fill rate 100%.")
-
-    final_paths = []
-    for idx, paths in enumerate(results):
-        if paths:
-            final_paths.extend(paths)
-        elif all_downloaded:
-            final_paths.append(all_downloaded[idx % len(all_downloaded)])
-
-    # Persist used URLs for candidate search and deduplication
-    try:
-        urls_file = output_dir.parent / "used_urls.json"
-        urls_file.write_text(json.dumps(list(job_used_urls)), encoding="utf-8")
-        logger.info(f"Saved {len(job_used_urls)} used photo URLs to {urls_file.name}")
-    except Exception as e:
-        logger.debug(f"Failed to write used_urls.json: {e}")
-
-    logger.info(f"Image search complete: {len(final_paths)} unique slides prepared from {num_segments} queries")
-    return final_paths
+    await asyncio.gather(*(select(i, text) for i, text in enumerate(segments)))
+    (output_dir.parent / 'visual_selection.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+    (output_dir.parent / 'used_urls.json').write_text(json.dumps(sorted(used_urls)), encoding='utf-8')
+    return results

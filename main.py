@@ -103,7 +103,7 @@ class VideoRequest(BaseModel):
     theme: str = "default"
     voice_rate: str = "+0%"
     target_length: int = 15000  # Default: 15,000 chars (~12-15 minutes narration)
-    skip_image_analysis: bool = True  # skip by default since Gemini Vision often 503s
+    skip_image_analysis: bool = False  # legacy field; candidate verification is mandatory
     is_preview: bool = False  # Fast preview mode (~30s, 4 slides) for testing subtitles & thumbnail
     ken_burns: bool = False  # Ken Burns dynamic camera drift / zoom
     transitions: bool = True  # Smooth slide crossfade transitions
@@ -118,7 +118,7 @@ class BatchVideoRequest(BaseModel):
     theme: str = "default"
     voice_rate: str = "+0%"
     target_length: int = 15000
-    skip_image_analysis: bool = True
+    skip_image_analysis: bool = False
     is_preview: bool = False
     ken_burns: bool = False
     transitions: bool = True
@@ -1644,83 +1644,23 @@ async def replace_flagged_slides(job_id: str):
     temp_dir = config.OUTPUT_DIR / "temp" / job_id / "images"
     temp_dir.mkdir(parents=True, exist_ok=True)
     
-    from services.query_helper import build_thematic_replacement_query, build_thematic_query_pool
     topic = job.get("topic", "")
-    title = job.get("script_data", {}).get("title") or job.get("result", {}).get("title") or ""
-    lead_story = job.get("script_data", {}).get("main_lead_story", "")
-    
-    # 1. Pre-populate used image hashes from ALL existing unflagged slides in this video!
-    used_hashes = set()
-    used_urls = set()
-    for s in slides:
-        if not s.get("flagged") and s.get("image_path"):
-            p = Path(s["image_path"])
-            if p.exists() and p.is_file():
-                h = image_searcher.compute_image_hash(p)
-                if h:
-                    used_hashes.add(h)
-    
-    # 2. Build deep dynamic query pool
-    query_pool = build_thematic_query_pool(topic=topic, title=title, lead_story=lead_story, count=max(60, len(slides)))
+    title = (job.get("script_data") or {}).get("title", "")
+    selected = [slide for slide in slides if slide.get("flagged")]
     replaced_indices = []
-    replace_counter = 0
+    if selected:
+        paths = await image_searcher.search_and_download_images(
+            queries=[slide.get("query") or topic for slide in selected],
+            segments=[slide.get("text", "") for slide in selected],
+            output_dir=temp_dir / ("verified_" + uuid.uuid4().hex[:8]),
+            topic=topic, title=title,
+        )
+        for slide, path in zip(selected, paths):
+            slide["image_path"] = path
+            slide["replaced"] = True
+            slide["flagged"] = False
+            replaced_indices.append(slide["index"])
 
-    for slide in slides:
-        if slide.get("flagged"):
-            idx = slide["index"]
-            primary_q = build_thematic_replacement_query(
-                topic=topic,
-                title=title,
-                lead_story=lead_story,
-                index=idx + replace_counter,
-                segment_text=slide.get("text", "")
-            )
-            replace_counter += 1
-            
-            # Formulate query cascade for this slide
-            queries_to_try = [primary_q]
-            if query_pool:
-                queries_to_try.append(query_pool[(idx + replace_counter * 3) % len(query_pool)])
-                queries_to_try.append(query_pool[(idx + replace_counter * 7 + 1) % len(query_pool)])
-            
-            slide["query"] = primary_q
-            downloaded = False
-            
-            for q in queries_to_try:
-                if downloaded:
-                    break
-                candidates = await image_searcher.search_images(q, count_per_source=15)
-                for c in candidates:
-                    u = c.get("url")
-                    if not u or u in used_urls:
-                        continue
-                    
-                    new_p = temp_dir / f"slide_{idx:03d}_rep_{int(time.time()*1000)}.jpg"
-                    if await image_searcher.download_image(u, new_p, forbidden_hashes=used_hashes):
-                        new_h = image_searcher.compute_image_hash(new_p)
-                        if new_h and new_h not in used_hashes:
-                            used_hashes.add(new_h)
-                            used_urls.add(u)
-                            slide["image_path"] = str(new_p)
-                            slide["replaced"] = True
-                            slide["flagged"] = False
-                            downloaded = True
-                            replaced_indices.append(idx)
-                            logger.info(f"[{job_id}] Auto-replaced slide #{idx+1} with fresh unique photo: {new_p.name} (hash={new_h[:8]})")
-                            break
-                        else:
-                            new_p.unlink(missing_ok=True)
-            
-            if not downloaded:
-                # If all external searches exhausted, try picking an unflagged image ONLY IF hash is distinct
-                all_imgs = [s["image_path"] for s in slides if not s.get("flagged") and Path(s["image_path"]).exists() and s["image_path"] != slide["image_path"]]
-                if all_imgs:
-                    cand_img = all_imgs[(idx * 7) % len(all_imgs)]
-                    slide["image_path"] = cand_img
-                    slide["replaced"] = True
-                    slide["flagged"] = False
-                    replaced_indices.append(idx)
-    
     _save_jobs()
     return {"status": "ok", "replaced_count": len(replaced_indices), "indices": replaced_indices}
 
@@ -2050,6 +1990,14 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
             except Exception as e:
                 logger.warning(f"Failed to save script_data.json: {e}")
         
+        if script_data.get("visual_plan_version") != 2:
+            from services.visual_plan import build_visual_segments
+            paragraphs = script_data.get("paragraphs") or script_data.get("segments") or []
+            script_data["segments"], script_data["search_queries"] = build_visual_segments(
+                paragraphs, script_data.get("visual_plan", []), req.topic
+            )
+            script_data["visual_plan_version"] = 2
+
         main_lead = script_data.get("main_lead_story", "")
 
         # Save script
@@ -2163,6 +2111,7 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
         img_download_task = asyncio.create_task(
             image_searcher.search_and_download_images(
                 queries=search_queries[:num_segments],
+                segments=script_data["segments"][:num_segments],
                 output_dir=temp_dir / "images",
                 progress_callback=img_progress,
                 topic=req.topic,
@@ -2292,42 +2241,15 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
         _update_job(job, "running", 70, f"Озвучка готова, загружено {downloaded_count}/{num_segments} фото", "images_downloaded",
                     detail=f"Движок: {tts_engine_name} | Фото: {downloaded_count}, пропущено: {num_segments - downloaded_count}")
         
-        # ====== STEP 5: Analyze Images (optional) ======
-        _check_cancelled()
-        if not req.skip_image_analysis and downloaded_count > 0:
-            def analysis_progress(cur, total, msg):
-                pct = 72 + int((cur / max(total, 1)) * 6)  # 72% to 78%
-                job["progress"] = min(78, pct)
-                job["detail"] = msg
-                logger.info(f"[{job['id']}] {msg}")
+        # Images were verified against their own narration before selection.
+        # Never substitute a photo approved for a different segment.
+        selection_file = temp_dir / "visual_selection.json"
+        if selection_file.exists():
+            job["visual_selection"] = json.loads(selection_file.read_text(encoding="utf-8"))
+        card_count = sum(item.get("kind") == "text_card" for item in job.get("visual_selection", []))
+        _update_job(job, "running", 78, "Подбор проверенных изображений завершён", "analysis_done",
+                    detail=f"Фото: {len(image_paths) - card_count}; текстовых карточек: {card_count}")
 
-            _update_job(job, "running", 72, "Анализ изображений (Gemini Vision)...", "analysis_started",
-                        detail=f"Проверка {downloaded_count} фото на качество и тему...")
-            
-            analysis_results = await image_analyzer.filter_images(
-                image_paths=image_paths,
-                segments=script_data["segments"],
-                topic=req.topic,
-                progress_callback=analysis_progress,
-            )
-            
-            approved_pool = [
-                r["path"] for r in analysis_results 
-                if r.get("relevant") and r.get("path") and Path(r["path"]).exists()
-            ]
-            for result in analysis_results:
-                idx = result.get("segment_index", -1)
-                if 0 <= idx < len(image_paths) and not result.get("relevant") and result.get("score", 0) < 4:
-                    if approved_pool:
-                        sub = approved_pool[idx % len(approved_pool)]
-                        logger.info(f"Replacing rejected image for segment {idx} (score={result.get('score')}) with approved photo: {Path(sub).name}")
-                        image_paths[idx] = sub
-                    else:
-                        logger.info(f"Image rejected: segment {idx}, score={result.get('score')}, reason={result.get('reason')}")
-            
-            _update_job(job, "running", 78, "Анализ изображений завершен", "analysis_done",
-                        detail=f"Проверено {downloaded_count} изображений")
-        
         # ====== PREPARE SLIDES METADATA ======
         _check_cancelled()
         segment_timings = tts_result.get("segment_timings", [])
