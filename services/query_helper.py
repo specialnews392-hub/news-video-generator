@@ -90,6 +90,13 @@ SCENE_REPLACEMENT_RULES = [
          "Konferenz Gespräch Kollegen Arbeitswelt Deutschland",
          "Fachkräfte Arbeit Handwerk Industrie Deutschland",
      ]),
+    (r"pflege|pflegegrad|pflegegeld|pflegeheim|senioren|altenheim|betreuung",
+     [
+         "Senior Pflegekraft Unterstützung Zuhause Deutschland",
+         "Pflegeheim Alltag Senioren Betreuung Deutschland",
+         "Senior Ärztin Patient Gespräch Praxis Deutschland",
+         "Senioren Alltag Gespräch Begegnung Deutschland",
+     ]),
     (r"sozialsystem|rente|bürgergeld|haushalt|regierung|politik|bundestag|krise|reform",
      [
          "Bundestag Plenarsaal Debatte Politiker Berlin",
