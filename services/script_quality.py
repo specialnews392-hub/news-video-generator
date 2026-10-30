@@ -3,7 +3,7 @@ import re
 import math
 
 
-MIN_NARRATION_SECONDS = 540  # 9 minutes minimum for 10-12 min long-form target
+MIN_NARRATION_SECONDS = 450  # 7.5 minutes minimum for long-form target (~8-12 min range)
 
 
 class ScriptQualityError(ValueError):
@@ -16,9 +16,9 @@ def count_words(text: str) -> int:
 
 def word_targets(target_length=None):
     if not target_length or target_length >= 14000:
-        # Standard long-form (10-12 minutes target @ ~140 wpm): target ~1800 words, min ~1350 words (~9.6-10 min)
-        target = 1800
-        min_words = 1350
+        # Standard long-form (~8-12 minutes target @ ~140 wpm): target ~1600 words, min ~1100 words (~7.8-11 min)
+        target = 1600
+        min_words = 1100
     else:
         # User specified custom shorter target length on slider
         target = max(800, int(target_length / 7.6))
@@ -31,7 +31,7 @@ def validate_narration_duration(seconds: float, is_preview=False, target_length=
         return
     min_seconds = MIN_NARRATION_SECONDS
     if target_length and target_length < 12000:
-        min_seconds = max(240, int(target_length * 0.04))
+        min_seconds = max(240, int(target_length * 0.035))
     if not math.isfinite(seconds) or seconds < min_seconds:
         raise ScriptQualityError(
             f"Озвучка длится {seconds or 0:.0f} сек., минимум — "

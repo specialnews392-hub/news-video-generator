@@ -1,6 +1,7 @@
 """Keep narration, visual intent and search terms aligned."""
 import re
 from pathlib import Path
+from services.query_helper import sanitize_segment_query, extract_topic_core, contains_forbidden_objects
 
 
 def build_visual_segments(paragraphs, visual_plan, topic):
@@ -27,12 +28,20 @@ def build_visual_segments(paragraphs, visual_plan, topic):
     return segments, queries
 
 
-def search_queries(query, topic, context):
+def search_queries(query, topic, context, index=0):
     def clean(value):
         return re.sub(r'\s+', ' ', re.sub(r'[^\w\säöüÄÖÜß-]', ' ', value)).strip()
-    anchor = ' '.join(clean(topic).split()[:7])
-    primary = ' '.join(clean(query).split()[:12])
-    candidates = [f'{primary} {anchor}'.strip(), anchor]
+
+    raw_q = clean(query)
+    if contains_forbidden_objects(raw_q):
+        primary = sanitize_segment_query(raw_q, topic=topic, index=index, segment_text=context)
+    else:
+        primary = ' '.join(raw_q.split()[:8])
+
+    anchor = extract_topic_core(topic) if len(clean(topic).split()) > 4 else ' '.join(clean(topic).split()[:5])
+    alt_scene = sanitize_segment_query("", topic=topic, index=index + 3, segment_text=context)
+
+    candidates = [primary, f'{primary} {anchor}'.strip(), alt_scene, anchor]
     # Concrete thematic fallback; never inject police/borders into unrelated topics.
     if re.search(r'rent[en]|pension|пенси', topic + ' ' + context, re.I):
         candidates.insert(1, 'Deutsche Rentenversicherung Beratung Senioren Deutschland')

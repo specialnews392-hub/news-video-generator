@@ -667,6 +667,35 @@ async def reset_all_running_jobs():
     return {"status": "ok", "cancelled_jobs": cancelled}
 
 
+@app.post("/api/job/{job_id}/dismiss")
+async def dismiss_job(job_id: str):
+    """Dismiss or delete an interrupted/failed job from active tracking."""
+    if job_id in jobs:
+        j = jobs[job_id]
+        if j.get("status") in ("failed", "cancelled", "awaiting_tts_choice"):
+            jobs.pop(job_id, None)
+            _save_jobs()
+            logger.info(f"[{job_id}] Dismissed and removed from jobs state")
+            return {"status": "dismissed", "job_id": job_id}
+        j["dismissed"] = True
+        _save_jobs()
+    return {"status": "ok", "job_id": job_id}
+
+
+@app.post("/api/jobs/clear-interrupted")
+async def clear_all_interrupted_jobs():
+    """Remove all failed and cancelled jobs from persistence."""
+    removed = []
+    for jid, j in list(jobs.items()):
+        if j.get("status") in ("failed", "cancelled", "awaiting_tts_choice"):
+            jobs.pop(jid, None)
+            removed.append(jid)
+    if removed:
+        _save_jobs()
+        logger.info(f"Cleared {len(removed)} interrupted/failed jobs from jobs state")
+    return {"status": "cleared", "count": len(removed), "removed_ids": removed}
+
+
 # === Telegram Notifications Settings ===
 
 class TelegramConfigRequest(BaseModel):
@@ -1956,11 +1985,12 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
                 if cached_sd.get("segments") and cached_sd.get("title") and len(cached_sd.get("segments", [])) > 0:
                     cached_text = cached_sd.get("script") or "\n\n".join(cached_sd.get("paragraphs") or cached_sd["segments"])
                     minimum_words, _ = word_targets(req.target_length)
-                    if cached_sd.get("status", "ready") == "ready" and (req.is_preview or count_words(cached_text) >= minimum_words):
+                    soft_floor = max(800, int(minimum_words * 0.85))
+                    if cached_sd.get("status", "ready") == "ready" and (req.is_preview or count_words(cached_text) >= soft_floor):
                         script_data = cached_sd
-                        logger.info(f"[{job_id}] Reusing validated script cache ({count_words(cached_text)} words)")
+                        logger.info(f"[{job_id}] Reusing validated script cache ({count_words(cached_text)} words, soft floor {soft_floor})")
                     else:
-                        logger.warning(f"[{job_id}] Cached script fails length/status checks; regenerating")
+                        logger.warning(f"[{job_id}] Cached script fails length/status checks ({count_words(cached_text)} < {soft_floor}); regenerating")
             except Exception as e:
                 logger.warning(f"Failed to read cached script_data.json: {e}")
 

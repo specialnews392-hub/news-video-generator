@@ -18,12 +18,13 @@ from services.script_quality import (
 class LengthChecks(unittest.TestCase):
     def test_minimum_and_duration_boundaries(self):
         self.assertEqual(word_targets(1000), (600, 800))
-        self.assertEqual(word_targets(15000), (1350, 1800))
+        self.assertEqual(word_targets(15000), (1100, 1600))
         self.assertEqual(count_words("EU-Reform für Bürger: 1.000 Euro."), 6)
-        for seconds in (195, 270, 336, 377, 539.99, float('nan')):
+        for seconds in (195, 270, 336, 377, 449.99, float('nan')):
             with self.assertRaises(ScriptQualityError):
                 validate_narration_duration(seconds)
-        validate_narration_duration(540)
+        validate_narration_duration(450)
+        validate_narration_duration(529)
         validate_narration_duration(600)
         validate_narration_duration(900)
         validate_narration_duration(30, is_preview=True)

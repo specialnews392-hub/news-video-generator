@@ -739,10 +739,18 @@ async function chooseTTSActionForJob(jobId, action = 'switch_to_edge') {
     }
 }
 
-function dismissInterruptedJob() {
+function dismissInterruptedJob(jobId) {
+    const targetId = jobId || window._interruptedJobId || currentJobId || localStorage.getItem('active_news_job_id');
     const banner = document.getElementById('interruptedJobBanner');
     if (banner) banner.style.display = 'none';
     window._interruptedJobId = null;
+    currentJobId = null;
+    currentJobData = null;
+    localStorage.removeItem('active_news_job_id');
+    if (targetId) {
+        localStorage.setItem('dismissed_interrupted_job_' + targetId, 'true');
+        fetch(`/api/job/${targetId}/dismiss`, { method: 'POST' }).catch(() => {});
+    }
 }
 
 // === Panel Management ===
@@ -830,9 +838,14 @@ async function copyScriptText() {
 }
 
 function resetGenerator() {
+    if (currentJobId) {
+        localStorage.setItem('dismissed_interrupted_job_' + currentJobId, 'true');
+        fetch(`/api/job/${currentJobId}/dismiss`, { method: 'POST' }).catch(() => {});
+    }
     currentJobId = null;
     currentJobData = null;
     localStorage.removeItem('active_news_job_id');
+    dismissInterruptedJob();
     stopPolling();
     showPanel('generator');
     setStatus('ready', 'Готов к работе');
@@ -1042,17 +1055,10 @@ async function loadHistory() {
             historyList.innerHTML = '<div class="history-empty">Пока нет завершённых или сохранённых генераций</div>';
         }
 
-        // Find the most recent interrupted job
-        const latestInterrupted = jobs.find(j => j.status === 'failed' || j.status === 'cancelled' || j.status === 'awaiting_tts_choice');
-
         // Check if there was an active job running before the page refresh
         let activeId = localStorage.getItem('active_news_job_id');
-        if (!activeId && latestInterrupted) {
-            activeId = latestInterrupted.id;
-            localStorage.setItem('active_news_job_id', activeId);
-        }
 
-        if (activeId) {
+        if (activeId && !localStorage.getItem('dismissed_interrupted_job_' + activeId)) {
             try {
                 const resp = await fetch(`/api/status/${activeId}`);
                 if (resp.ok) {
@@ -1075,18 +1081,20 @@ async function loadHistory() {
                     } else if (job.status === 'completed') {
                         showResults(job);
                         setStatus('ready', 'Готов к работе');
+                        localStorage.removeItem('active_news_job_id');
                     } else if (job.status === 'failed' || job.status === 'cancelled' || job.status === 'awaiting_tts_choice') {
-                        showInterruptedJobBanner(job);
+                        if (!localStorage.getItem('dismissed_interrupted_job_' + job.id)) {
+                            showInterruptedJobBanner(job);
+                        } else {
+                            localStorage.removeItem('active_news_job_id');
+                        }
                     }
-                } else if (latestInterrupted) {
-                    showInterruptedJobBanner(latestInterrupted);
+                } else {
+                    localStorage.removeItem('active_news_job_id');
                 }
             } catch(err) {
                 console.warn('Error reconnecting to active job:', err);
-                if (latestInterrupted) showInterruptedJobBanner(latestInterrupted);
             }
-        } else if (latestInterrupted) {
-            showInterruptedJobBanner(latestInterrupted);
         }
 
     } catch (e) {

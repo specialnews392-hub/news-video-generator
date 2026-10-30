@@ -1,79 +1,134 @@
 """
 Query Helper - Thematic query sanitization and context anchoring.
-Guarantees that image queries strictly reflect the news video topic and headline,
-completely eliminating irrelevant objects (tables, chairs, microphones, diagrams, laptops, etc.).
+Guarantees that image queries strictly reflect real documentary/editorial scenes,
+completely eliminating irrelevant objects (tables, chairs, sofas, microphones, diagrams,
+charts, scanned forms, ID cards, laptops, YouTube logos, grammar tables, etc.).
 Provides an extensive pool of diverse, sharp visual queries for video generation and replacement.
-Works dynamically for ANY topic (Migration, Economy & Pensions, Defence, Politics, etc.).
 """
 import re
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Forbidden words that produce irrelevant stock photos, office furniture, stationery or abstract charts
+# Forbidden words that produce irrelevant stock photos, office furniture, stationery, forms, or charts
 FORBIDDEN_OBJECT_TERMS = {
-    # German
+    # German furniture / office objects
     "tisch", "tische", "runder tisch", "stuhl", "stühle", "buerostuhl", "bürostuhl",
+    "sofa", "sofas", "couch", "sessel", "möbel", "moebel", "einrichtung", "wartezimmer",
+    "schreibtisch", "büro", "buero", "bueroraum", "büroraum", "arbeitsplatz", "besprechungsraum",
+    # Audio / tech / screens / gaming
     "mikrofon", "mikrofone", "mikro", "laptop", "computer", "pc", "tastatur",
+    "bildschirm", "monitor", "display", "smartphone", "handy", "telefon",
+    "gaming", "videospiel", "videospiele", "konsole",
+    # Charts / maps / stats
     "diagramm", "diagramme", "grafik", "grafiken", "statistik", "statistiken",
     "tabelle", "tabellen", "balkendiagramm", "kurvendiagramm", "chart", "charts",
-    "ordner", "aktenordner", "papier", "papiere", "dokument", "dokumente",
-    "schreibtisch", "büro", "buero", "bueroraum", "büroraum",
+    "prozent", "umfrage", "karte", "landkarte", "skala", "kurve", "infografik",
+    # Documents / forms / IDs / signs
+    "ordner", "aktenordner", "akten", "aktenstapel", "papier", "papiere", "dokument", "dokumente",
+    "formular", "attest", "krankmeldung", "arbeitsunfähigkeit", "arbeitsunfähigkeitsbescheinigung",
+    "bescheinigung", "ausweis", "personalausweis", "pass", "reisepass", "antrag", "vertrag",
+    "schild", "plakat", "zettel", "brief", "unterschrift",
+    # Generic closeups & YouTube / social media
     "nahaufnahme", "detailaufnahme", "hände", "haende", "hand", "kugelschreiber", "stift",
-    "leerer raum", "symbolbild tisch", "symbolbild mikrofon",
-    
+    "leerer raum", "symbolbild", "youtube", "abspann", "kanal", "abo", "abonnieren",
+    "logo", "icon", "banner", "thumbnail",
+
     # English
-    "table", "tables", "round table", "chair", "chairs", "desk", "office chair",
-    "microphone", "microphones", "mic", "laptop", "computer", "keyboard",
-    "diagram", "diagrams", "chart", "charts", "graph", "graphs", "statistics",
-    "table sheet", "spreadsheet", "folder", "folders", "paper", "papers", "document",
-    "office", "close up table", "close up mic", "hands", "pen",
-    
+    "table", "tables", "round table", "chair", "chairs", "desk", "office chair", "sofa", "couch",
+    "microphone", "microphones", "mic", "laptop", "computer", "keyboard", "screen", "monitor",
+    "diagram", "diagrams", "chart", "charts", "graph", "graphs", "statistics", "map",
+    "table sheet", "spreadsheet", "folder", "folders", "paper", "papers", "document", "form",
+    "office", "close up table", "close up mic", "hands", "pen", "id card", "passport",
+
     # Russian
-    "стол", "столы", "круглый стол", "стул", "стулья", "кресло",
-    "микрофон", "микрофоны", "ноутбук", "компьютер", "клавиатура",
-    "диаграмма", "диаграммы", "график", "графики", "статистика", "статистики",
-    "таблица", "таблицы", "папка", "папки", "бумага", "бумаги", "документ",
+    "стол", "столы", "круглый стол", "стул", "стулья", "кресло", "диван", "мебель",
+    "микрофон", "микрофоны", "ноутбук", "компьютер", "клавиатура", "экран", "монитор",
+    "диаграмма", "диаграммы", "график", "графики", "статистика", "статистики", "карта",
+    "таблица", "таблицы", "папка", "папки", "бумага", "бумаги", "документ", "справка", "бланк",
     "кабинет", "офис", "ручка", "руки", "крупный план стол", "крупный план микрофон",
 }
 
-# Thematic modifier angles by category to ensure high visual variety without repetition
+# Conversational / grammatical stopwords that must NEVER be sent to image search engines
+CONVERSATIONAL_STOPWORDS = {
+    "wenn", "dann", "weil", "denn", "deshalb", "obwohl", "dass", "aber", "oder", "doch",
+    "sind", "ist", "war", "waren", "wird", "werden", "wurde", "wurden", "haben", "hat", "hatte",
+    "viele", "viel", "mehr", "weniger", "irgendwann", "überlastet", "ueberlastet",
+    "dieser", "diese", "dieses", "diesem", "diesen", "jeder", "jede", "jedes",
+    "nicht", "kein", "keine", "keinen", "schon", "noch", "immer", "wieder", "heute", "jetzt",
+    "warum", "wieso", "weshalb", "wie", "was", "wer", "wo", "wann", "welche", "welcher",
+    "alle", "alles", "allen", "einer", "eine", "einen", "einem", "eines", "der", "die", "das",
+    "und", "in", "im", "an", "am", "auf", "aus", "bei", "mit", "nach", "von", "vor", "zu", "zum", "zur",
+    "für", "fuer", "über", "ueber", "unter", "durch", "gegen", "ohne", "um", "so", "es", "sie", "wir", "ihr",
+}
+
+# Semantic mapping from problematic query themes to authentic photojournalistic scenes
+SCENE_REPLACEMENT_RULES = [
+    (r"wartezimmer|arztpraxis|patient|attest|krankmeldung|arbeitsunfähigkeit|aok|krankenkasse|kassensitz",
+     [
+         "Arzt Patient Gespräch Behandlung Klinik Deutschland",
+         "Krankenhaus Ärzte Pflegepersonal Station Deutschland",
+         "Medizinische Untersuchung Arztpraxis Gesundheit Deutschland",
+         "Klinik Personal Ärzte Visite Krankenhaus Deutschland",
+     ]),
+    (r"psychotherapie|therapie|psycholog|depression|beratung|familie|eltern|kind",
+     [
+         "Psychologe Beratung Gespräch Praxis Deutschland",
+         "Sozialberatung Familie Unterstützung Gespräch Deutschland",
+         "Gesprächstherapie Ärztin Patientin Beratung Deutschland",
+     ]),
+    (r"sofa|couch|erschöpft|müde|erholung|feierabend|stress|belastung",
+     [
+         "Pendler Bahnhof Feierabend Menschenmenge Deutschland",
+         "Passanten Fußgängerzone Alltag Stadt Deutschland",
+         "Arbeitnehmer Pause Großstadt Straße Deutschland",
+     ]),
+    (r"büro|schreibtisch|akten|dokument|arbeitsplatz|mitarbeiter|arbeitnehmer|besprechung|unternehmen|betrieb",
+     [
+         "Mitarbeiter Team Diskussion Unternehmen Deutschland",
+         "Arbeitnehmer Produktion Werkhalle Industrie Deutschland",
+         "Konferenz Gespräch Kollegen Arbeitswelt Deutschland",
+         "Fachkräfte Arbeit Handwerk Industrie Deutschland",
+     ]),
+    (r"sozialsystem|rente|bürgergeld|haushalt|regierung|politik|bundestag|krise|reform",
+     [
+         "Bundestag Plenarsaal Debatte Politiker Berlin",
+         "Reichstag Regierungsviertel Berlin Politik Deutschland",
+         "Bundesregierung Pressekonferenz Statement Berlin",
+         "Passanten Bürger Innenstadt Deutschland Alltag",
+     ]),
+    (r"prozent|grafik|diagramm|tabelle|umfrage|statistik|karte|zahlen",
+     [
+         "Menschen Fußgängerzone Einkaufsstraße Deutschland Alltag",
+         "Bürger Öffentlichkeit Stadtzentrum Deutschland",
+         "Arbeitnehmer Pendler Stadtverkehr Deutschland",
+     ]),
+    (r"youtube|abspann|kanal|abo|bildschirm|computer|gaming|videospiel",
+     [
+         "Journalisten Nachrichtenredaktion Fernsehstudio Deutschland",
+         "IT Spezialisten Entwickler Team Technologie Deutschland",
+         "Medien Redaktion Arbeit Nachrichten Deutschland",
+     ]),
+]
+
+# Diverse documentary/editorial visual angles
 THEMATIC_ANGLES = [
-    "{topic}",
-    "{title}",
-    "{topic} Politik Debatte",
-    "{topic} Regierung Statement",
-    "{topic} Bürger Öffentlichkeit",
-    "{topic} Pressekonferenz Politiker",
-    "{topic} Kontrolle Einsatz",
-    "{title} Deutschland",
-    "{topic} Menschen Bericht",
-    "{topic} Bundestag Diskussion",
-    "{topic} Bundespolizei Einsatz",
-    "{topic} Ministerium Konferenz",
-    "{topic} Grenzstation Kontrolle",
-    "{topic} Versammlung Demonstration",
-    "{topic} Kanzleramt Statement",
-    "{topic} Justiz Gerichtsverhandlung",
-    "{topic} Berlin Regierungsviertel",
-    "{topic} Stadt Rathaus Sitzung",
-    "{topic} Sicherheit Lagebericht",
-    "{topic} Europa Brüssel Gipfel",
-    "{topic} Nachrichten Sprecher",
-    "{topic} Gesetz Abstimmung",
-    "{topic} Polizei Absperrung",
-    "{topic} Protest Bürger",
-    "{topic} Dokumente Unterzeichnung",
-    "{topic} Opposition Kritik",
-    "{topic} Fakten Überprüfung",
-    "{topic} Reform Konzept",
-    "{topic} Ankunft Flughafen Kontrolle",
-    "{topic} Beamte Einsatzort",
-    "{topic} Tagesschau Bericht",
-    "{topic} Bundesrat Debatte",
-    "{topic} Politik Interview",
-    "{topic} Konfrontation Streit",
-    "{topic} Wahlen Umfrage",
+    "{topic} Bundestag Debatte Berlin",
+    "{topic} Bürger Innenstadt Deutschland",
+    "{topic} Pressekonferenz Politiker Berlin",
+    "Arzt Patient Behandlung Klinik Deutschland",
+    "Arbeitnehmer Industrie Werkhalle Deutschland",
+    "Krankenhaus Pflegepersonal Ärzte Deutschland",
+    "Passanten Fußgängerzone Großstadt Deutschland",
+    "Bundestag Regierungsviertel Berlin Politik",
+    "Mitarbeiter Team Besprechung Unternehmen Deutschland",
+    "Pendler Bahnhof Stadtverkehr Deutschland",
+    "Soziale Arbeit Ehrenamt Hilfe Deutschland",
+    "Senioren Bürger Alltag Stadt Deutschland",
+    "Kanzleramt Berlin Regierung Politik",
+    "Fachkräfte Handwerk Produktion Deutschland",
+    "Rathaus Behörde Bürgeramt Deutschland",
+    "Klinik Ambulanz Medizinische Versorgung Deutschland",
 ]
 
 
@@ -81,23 +136,64 @@ def clean_query_text(text: str) -> str:
     """Strip special chars, markdown artifacts, punctuation."""
     if not text:
         return ""
-    cleaned = re.sub(r'[*#_`!?:;\"\'«»(){}\[\]]', ' ', text)
+    cleaned = re.sub(r'[*#_`!?:;\"\'«»(){}\[\],.—–-]', ' ', text)
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     return cleaned
 
 
+def extract_topic_core(topic: str) -> str:
+    """
+    Extract concrete German nouns/entities from a potentially conversational headline.
+    For example: 'Wenn es so viele sind, dann ist das Sozialsystem irgendwann überlastet'
+    -> 'Sozialsystem Deutschland'
+    """
+    cleaned = clean_query_text(topic)
+    if not cleaned:
+        return "Deutschland Politik Gesellschaft"
+
+    # Find capitalized words (German nouns) that aren't conversational stopwords or forbidden objects
+    nouns = []
+    for w in cleaned.split():
+        w_low = w.lower()
+        if len(w) >= 4 and w[0].isupper() and w_low not in CONVERSATIONAL_STOPWORDS and w_low not in FORBIDDEN_OBJECT_TERMS:
+            if w not in nouns:
+                nouns.append(w)
+
+    if nouns:
+        core = " ".join(nouns[:3])
+        if "deutschland" not in core.lower() and "berlin" not in core.lower():
+            core = f"{core} Deutschland"
+        return core
+
+    return "Deutschland Gesellschaft Politik"
+
+
 def contains_forbidden_objects(query: str) -> bool:
-    """Check if query contains any forbidden inanimate object words."""
+    """Check if query contains any forbidden inanimate object words or conversational clauses."""
     if not query:
         return True
     q_lower = query.lower()
     words = re.findall(r'\b\w+\b', q_lower)
+    if not words:
+        return True
+
     for w in words:
         if w in FORBIDDEN_OBJECT_TERMS:
             return True
+
+    # Reject if query starts with conversational conjunctions ("Wenn es so...", "Weil...", etc.)
+    if words[0] in {"wenn", "weil", "obwohl", "dass", "warum", "wieso", "wie"}:
+        return True
+
+    # Reject if more than half of words are conversational stopwords
+    stop_count = sum(1 for w in words if w in CONVERSATIONAL_STOPWORDS)
+    if len(words) >= 5 and stop_count >= len(words) // 2:
+        return True
+
     for phrase in [
         "runder tisch", "round table", "круглый стол",
-        "symbolbild tisch", "close up", "nahaufnahme mikrofon"
+        "symbolbild tisch", "close up", "nahaufnahme mikrofon",
+        "youtube kanal", "abspann"
     ]:
         if phrase in q_lower:
             return True
@@ -109,24 +205,12 @@ def extract_key_entities(text: str) -> list[str]:
     if not text:
         return []
     cleaned = clean_query_text(text)
-    # Match capitalized words with length >= 4 (German nouns / names)
     candidates = re.findall(r'\b[A-ZÄÖÜ][a-zäöüß]{3,}\b', cleaned)
-    
-    # Ignore common grammatical words
-    stopwords = {
-        "Dass", "Wenn", "Aber", "Oder", "Weil", "Denn", "Doch", "Hier", "Dort",
-        "Diese", "Dieser", "Dieses", "Nach", "Seit", "Durch", "Ueber", "Unter",
-        "Wurde", "Werden", "Haben", "Hatte", "Gibt", "Kann", "Konnte", "Soll",
-        "Viele", "Alles", "Nicht", "Immer", "Schon", "Jetzt", "Heute", "Wieder",
-        "Dabei", "Damit", "Davon", "Dazu", "Trotz", "Wegen", "Bereits",
-        "Dieser", "Diese", "Dieses", "Diesen", "Diesem", "Eines", "Einem",
-        "Einer", "Einen", "Keine", "Kein", "Mehr", "Sehr", "Wann", "Warum",
-        "Sowie", "Wobei", "Daraus", "Hierzu", "Indem", "Gegen", "Waehrend"
-    }
-    
+
     filtered = []
     for c in candidates:
-        if c not in stopwords and not contains_forbidden_objects(c):
+        c_low = c.lower()
+        if c_low not in CONVERSATIONAL_STOPWORDS and c_low not in FORBIDDEN_OBJECT_TERMS:
             if c not in filtered:
                 filtered.append(c)
     return filtered[:6]
@@ -140,36 +224,17 @@ def build_thematic_query_pool(
     count: int = 50,
 ) -> list[str]:
     """
-    Build a comprehensive, diversified pool of high-quality thematic image search queries.
-    Anchored to the video topic, headline, lead story, and key actors/institutions.
-    Guarantees no repetitive queries and filters out forbidden stock objects.
+    Build a comprehensive, diversified pool of high-quality photojournalistic search queries.
     """
-    topic_clean = clean_query_text(topic)
-    if not topic_clean:
-        topic_clean = "Aktuelle Nachrichten Deutschland"
-    
-    title_clean = clean_query_text(title)
-    if title_clean:
-        words = title_clean.split()
-        if len(words) > 5:
-            title_clean = " ".join(words[:5])
-    else:
-        title_clean = topic_clean
+    core_topic = extract_topic_core(topic or title)
+    short_noun = core_topic.split()[0] if core_topic else "Deutschland"
 
-    lead_clean = clean_query_text(lead_story)
-    
-    # Extract entities from all available context
-    full_context = f"{lead_clean} {title_clean}"
-    if segments:
-        full_context += " " + " ".join(segments[:15])
-    entities = extract_key_entities(full_context)
-    
     pool = []
     seen = set()
 
     def add_q(q_candidate: str):
         c = clean_query_text(q_candidate)
-        words = [w for w in c.split() if w.lower() not in FORBIDDEN_OBJECT_TERMS]
+        words = [w for w in c.split() if w.lower() not in FORBIDDEN_OBJECT_TERMS and w.lower() not in CONVERSATIONAL_STOPWORDS]
         final_q = " ".join(words[:6])
         if len(final_q) >= 5 and not contains_forbidden_objects(final_q):
             norm = final_q.lower()
@@ -177,45 +242,26 @@ def build_thematic_query_pool(
                 seen.add(norm)
                 pool.append(final_q)
 
-    # 1. Base topic and title variations
-    add_q(topic_clean)
-    if title_clean and title_clean.lower() != topic_clean.lower():
-        add_q(title_clean)
-    if lead_clean:
-        lead_words = lead_clean.split()
-        if len(lead_words) >= 3:
-            add_q(" ".join(lead_words[:4]))
+    # 1. Add all journalistic scene replacements
+    for _, scenes in SCENE_REPLACEMENT_RULES:
+        for sc in scenes:
+            add_q(sc)
 
-    # 2. Add entity-anchored queries (politicians, ministries, institutions)
-    short_topic = " ".join(topic_clean.split()[:2])
-    for ent in entities:
-        add_q(f"{ent} Politiker")
-        add_q(f"{short_topic} {ent}")
-        add_q(f"{ent} Pressekonferenz")
-        add_q(f"{ent} Statement")
-
-    # 3. Add thematic angle templates
+    # 2. Add thematic angle templates
     for tmpl in THEMATIC_ANGLES:
-        q_str = tmpl.format(topic=short_topic, title=title_clean)
-        add_q(q_str)
+        add_q(tmpl.format(topic=short_noun, title=core_topic))
 
-    # 4. In case we need more, combine top entities with actions
-    action_terms = [
-        "Debatte", "Entscheidung", "Kontrolle", "Beratung", "Gipfel",
-        "Einsatz", "Kritik", "Ergebnisse", "Zahlen Bericht", "Protest"
-    ]
-    for ent in entities[:4]:
-        for act in action_terms:
-            add_q(f"{ent} {act}")
-            if len(pool) >= count:
-                break
-        if len(pool) >= count:
-            break
+    # 3. Extract entities from context
+    full_context = f"{lead_story} {title}"
+    if segments:
+        full_context += " " + " ".join(segments[:15])
+    entities = extract_key_entities(full_context)
+    for ent in entities[:5]:
+        add_q(f"{ent} Deutschland Foto")
+        add_q(f"{ent} Politik Bürger Deutschland")
 
-    # 5. Fill remaining with varied topic angles if needed
-    for i in range(len(pool), count):
-        idx = i % len(THEMATIC_ANGLES)
-        add_q(f"{topic_clean} {THEMATIC_ANGLES[idx].replace('{topic}', '').replace('{title}', '').strip()}")
+    while len(pool) < count and pool:
+        pool.append(pool[len(pool) % len(pool)])
 
     return pool[:count]
 
@@ -226,73 +272,43 @@ def build_thematic_replacement_query(
     lead_story: str = "",
     index: int = 0,
     segment_text: str = "",
+    raw_query: str = "",
 ) -> str:
     """
-    Build a fresh, highly relevant thematic query for replacing a slide.
-    Never repeats broken stock queries. Firmly anchored to the topic and headline.
+    Build a fresh, photojournalistic query for a slide, matching segment context first.
     """
-    topic_clean = clean_query_text(topic)
-    if not topic_clean:
-        topic_clean = "Aktuelle Nachrichten Deutschland"
-    
-    # 1. Try extracting key political/event entity from segment voiceover text
-    entities = extract_key_entities(segment_text) if segment_text else []
-    
-    # If we found a strong entity in segment, use it with high priority
-    if entities:
-        entity_name = entities[0]
-        words = topic_clean.split()
-        short_topic = " ".join(words[:2]) if len(words) >= 2 else topic_clean
-        candidate_q = f"{short_topic} {entity_name}"
-        if not contains_forbidden_objects(candidate_q):
-            return candidate_q
+    combined_hint = f"{raw_query} {segment_text}".lower()
+    for pattern, scenes in SCENE_REPLACEMENT_RULES:
+        if re.search(pattern, combined_hint, re.I):
+            return scenes[index % len(scenes)]
 
-    # Shorten title to 4-5 high-impact words
-    title_clean = clean_query_text(title)
-    if title_clean:
-        words = title_clean.split()
-        if len(words) > 5:
-            title_clean = " ".join(words[:5])
-    else:
-        title_clean = topic_clean
-
-    # Select template angle based on index
-    angle_idx = index % len(THEMATIC_ANGLES)
-    template = THEMATIC_ANGLES[angle_idx]
-    
-    short_topic = " ".join(topic_clean.split()[:3])
-    base_q = template.format(topic=short_topic, title=title_clean)
-    
-    clean_q = clean_query_text(base_q)
-    words = [w for w in clean_q.split() if w.lower() not in FORBIDDEN_OBJECT_TERMS]
-    final_q = " ".join(words[:6])
-    
-    if len(final_q) < 5 or contains_forbidden_objects(final_q):
-        return topic_clean
-    
-    return final_q
+    core_topic = extract_topic_core(topic or title)
+    short_noun = core_topic.split()[0] if core_topic else "Deutschland"
+    tmpl = THEMATIC_ANGLES[index % len(THEMATIC_ANGLES)]
+    return tmpl.format(topic=short_noun, title=core_topic)
 
 
-def sanitize_segment_query(query: str, topic: str, title: str = "", index: int = 0) -> str:
+def sanitize_segment_query(query: str, topic: str, title: str = "", index: int = 0, segment_text: str = "") -> str:
     """
     Sanitizes any segment search query.
-    If query contains forbidden words (tables, chairs, microphones, etc.) or is empty/generic,
-    replaces it with an anchored thematic query.
+    If query contains forbidden words (sofas, desks, charts, documents, YouTube, conversational sentences),
+    replaces it with a concrete documentary photo scene query.
     """
     q_clean = clean_query_text(query)
-    
-    # If query is corrupted by irrelevant stock items or too short
+
+    # Check if query matches any problematic scene rule or forbidden object
     if not q_clean or len(q_clean.split()) < 2 or contains_forbidden_objects(q_clean):
-        logger.info(f"Sanitizing irrelevant query '{query}' -> anchoring to topic '{topic}'")
-        return build_thematic_replacement_query(topic=topic, title=title, index=index)
-    
-    # Ensure query contains at least some topic context if it's very abstract
-    topic_words = set(clean_query_text(topic).lower().split())
-    query_words = set(q_clean.lower().split())
-    
-    # If completely disconnected and short (e.g. 2 generic words like "streit diskussion")
-    if len(query_words) <= 2 and not (topic_words & query_words):
-        main_topic_anchor = " ".join(clean_query_text(topic).split()[:2])
-        return f"{main_topic_anchor} {q_clean}"
-    
-    return q_clean
+        new_q = build_thematic_replacement_query(
+            topic=topic, title=title, index=index, segment_text=segment_text, raw_query=q_clean
+        )
+        logger.info(f"Sanitizing query '{query}' -> '{new_q}'")
+        return new_q
+
+    # Strip any remaining conversational stopwords from the query
+    clean_words = [w for w in q_clean.split() if w.lower() not in CONVERSATIONAL_STOPWORDS and w.lower() not in FORBIDDEN_OBJECT_TERMS]
+    if len(clean_words) < 2:
+        return build_thematic_replacement_query(
+            topic=topic, title=title, index=index, segment_text=segment_text, raw_query=q_clean
+        )
+
+    return " ".join(clean_words[:6])
