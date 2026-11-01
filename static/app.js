@@ -943,6 +943,9 @@ function addToHistory(job, prepend = true) {
                     👁️ Сценарий
                 </button>
             ` : ''}
+            <button type="button" class="btn-hist-action" onclick="event.stopPropagation(); deleteHistoryJob('${job.id}')" title="Удалить этот ролик из истории" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35); padding: 4px 8px; border-radius: 6px; cursor: pointer;">
+                🗑️ Удалить
+            </button>
             <span class="history-item-status failed" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.4);">
                 ⚠️ Прервано (${job.progress || 0}%)
             </span>
@@ -3558,3 +3561,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 });
 
+
+
+// === History Job Deletion & Slide Review Cancellation ===
+async function deleteHistoryJob(jobId) {
+    if (!jobId) return;
+    if (!confirm('Удалить эту незавершенную генерацию из списка?')) return;
+    try {
+        await fetch(`/api/job/${jobId}/dismiss`, { method: 'POST' });
+        const el = document.getElementById(`hist-item-${jobId}`);
+        if (el) el.remove();
+        if (currentJobId === jobId) {
+            resetGenerator();
+        }
+        const banner = document.getElementById('interruptedJobBanner');
+        if (banner && window._interruptedJobId === jobId) {
+            banner.style.display = 'none';
+        }
+    } catch (e) {
+        console.warn('Failed to delete job:', e);
+    }
+}
+
+async function cancelJobFromSlideReview() {
+    if (!confirm('Прервать создание этого видео и отменить сборку?')) return;
+    const modal = document.getElementById('slideReviewModal');
+    if (modal) modal.style.display = 'none';
+    await cancelCurrentJob();
+}

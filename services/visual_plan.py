@@ -17,7 +17,7 @@ def build_visual_segments(paragraphs, visual_plan, topic):
         # Keep complete sentences together: avoid illustrating isolated clauses.
         group = ''
         for sentence in re.split(r'(?<=[.!?…])\s+', paragraph.strip()):
-            if group and len(group) + len(sentence) > 300:
+            if group and len(group) + len(sentence) > 160:
                 segments.append(group)
                 queries.append(query)
                 group = ''
