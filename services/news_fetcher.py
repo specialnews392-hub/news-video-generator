@@ -33,7 +33,10 @@ HISTORY_FILE = config.OUTPUT_DIR / "news_history.json"
 ACUTE_TOPIC_CATALOG = {
     "migration_de": {
         "name": "Migration & Asylpolitik Deutschland",
-        "patterns": ["migration", "asyl", "flücht", "abschieb", "grenzkontroll", "grenze", "grenzen", "einwander", "zuwander", "geas", "bamf"],
+        "patterns": [
+            "migrat", "migration", "asyl", "flücht", "abschieb", "grenzkontroll", "grenze", "grenzen",
+            "einwander", "zuwander", "geas", "bamf", "dublin", "bezahlkarte", "schengen", "schleuser"
+        ],
         "sub_angles": [
             {
                 "id": "bezahlkarte",
@@ -259,7 +262,12 @@ ACUTE_TOPIC_CATALOG = {
     },
     "rente_soziales_de": {
         "name": "Rente, Bürgergeld & Sozialreformen",
-        "patterns": ["rente", "bürgergeld", "buergergeld", "sozial", "rentenpaket", "heil", "lindner", "arbeitslos"],
+        "patterns": [
+            "rentn", "rente", "renten", "pension", "pensionär", "senio", "altersarmut", "altersrente",
+            "grundsicherung", "ruhestand", "generationenkapital", "mütterrente", "witwenrente",
+            "rentenniveau", "rentenalter", "sozial", "bürgergeld", "buergergeld", "rentenpaket",
+            "heil", "lindner", "arbeitslos"
+        ],
         "sub_angles": [
             {
                 "id": "buergergeld_sanktionen",
@@ -326,10 +334,11 @@ ACUTE_TOPIC_CATALOG = {
         "pflege_gesundheit_de": {
         "name": "Pflege, Gesundheit & Senioren-Rechte (Pflege-Kompass)",
         "patterns": [
-            "pflege", "pflegegrad", "pflegegeld", "pflegekasse", "pflegereform", "pflegeheim",
-            "krankenkasse", "zusatzbeitrag", "gesundheit", "mdk", "medizinischer dienst",
-            "entlastungsbetrag", "heimkosten", "senioren", "patientenverfügung", "vorsorgevollmacht",
-            "hausarzt", "schonvermögen", "verhinderungspflege", "kurzzeitpflege"
+            "pfleg", "pflege", "pflegegrad", "pflegegeld", "pflegekasse", "pflegereform", "pflegeheim",
+            "altenheim", "krankenkass", "krankenkasse", "zusatzbeitrag", "gesundheit", "mdk",
+            "medizinischer dienst", "entlastungsbetrag", "heimkosten", "senioren", "senior",
+            "patientenverfügung", "vorsorgevollmacht", "hausarzt", "kur", "schonvermögen",
+            "verhinderungspflege", "kurzzeitpflege", "pflegebox", "pflegebedürftig"
         ],
         "sub_angles": [
             {
@@ -742,10 +751,13 @@ def get_recent_video_titles(limit: int = 8) -> list[str]:
 
 def identify_acute_cluster(topic: str) -> tuple[str, dict | None]:
     """Identify which acute catalog category matches the input topic."""
-    t_lower = topic.lower()
+    if not topic:
+        return "", None
+    t_lower = topic.lower().strip()
     for cat_id, cat_info in ACUTE_TOPIC_CATALOG.items():
-        if any(pat in t_lower for pat in cat_info["patterns"]):
-            return cat_id, cat_info
+        for pat in cat_info.get("patterns", []):
+            if pat in t_lower:
+                return cat_id, cat_info
     return "", None
 
 
@@ -1664,12 +1676,24 @@ async def fetch_news(topic: str, lang: str = "ru", newsapi_key: str = "", acute_
     return result
 
 
+HOOK_PRESETS = [
+    ("AKTUELLE ENTWICKLUNG", "СРОЧНЫЕ ДЕТАЛИ"),
+    ("NEUE ENTHÜLLUNG", "НОВЫЕ ПОДРОБНОСТИ"),
+    ("ENTSCHEIDUNG GEFALLEN", "РЕШЕНИЕ ПРИНЯТО"),
+    ("GROSSER WENDEPUNKT", "РЕЗКИЙ ПОВОРОТ"),
+    ("DAS VERSTECKTE DETAIL", "СКРЫТАЯ ДЕТАЛЬ"),
+    ("DRINGENDE WARNUNG", "ТРЕВОЖНЫЙ СИГНАЛ"),
+    ("OFFIZIELLE ZAHLEN", "ОФИЦИАЛЬНЫЕ ЦИФРЫ"),
+    ("SKANDAL-DEBATTE", "ОСТРЫЙ СПОР"),
+]
+
 async def get_acute_topics_preview(
     topic: str = "",
     lang: str = "de",
     offset: int = 0,
     exclude_ids: list[str] = None,
     limit: int = 8,
+    category: str = "",
 ) -> dict:
     """
     Generate an interactive list of sharp, acute, live topics of the day for UI selection.
@@ -1678,10 +1702,13 @@ async def get_acute_topics_preview(
     """
     from services.translator import translate_to_ru
 
-    cat_id, cat_info = identify_acute_cluster(topic) if topic else ("", None)
-    if not cat_info:
-        cat_id = "migration_de" if lang == "de" else "ru_politics"
+    clean_topic = topic.strip()
+    cat_id, cat_info = ("", None)
+    if category and category in ACUTE_TOPIC_CATALOG:
+        cat_id = category
         cat_info = ACUTE_TOPIC_CATALOG[cat_id]
+    elif clean_topic:
+        cat_id, cat_info = identify_acute_cluster(clean_topic)
         
     hist = load_news_history()
     already_used_angles = set(hist.get("used_sub_angles", []))
@@ -1724,13 +1751,55 @@ async def get_acute_topics_preview(
                 tokens.add(part)
         return list(tokens)
 
-    available_catalog = [ang for ang in cat_info["sub_angles"] if ang["id"] not in all_excluded]
-    if not available_catalog:
-        # All catalog angles have been used in previous runs.
-        # Recycle catalog angles so the user is NEVER left with an empty screen with 0 items:
-        logger.info(f"All catalog angles for '{cat_id}' are in history. Recycling catalog angles for new cycle.")
-        available_catalog = list(cat_info["sub_angles"])
-        all_excluded = set()
+    # Fetch real breaking news directly for user's explicit query if provided
+    custom_live_articles = []
+    if clean_topic:
+        q_clean = re.sub(r'[^a-zA-ZäöüßА-Яа-яё0-9\s]', ' ', clean_topic).strip()
+        search_terms = [w for w in q_clean.split() if len(w) >= 3]
+        if search_terms:
+            main_q = " ".join(search_terms[:4])
+            live_url = f"https://news.google.com/rss/search?q={quote_plus(f'{main_q} when:7d')}&hl={lang}&gl=DE&ceid=DE:{lang}"
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            try:
+                async with httpx.AsyncClient(timeout=8.0, headers=headers) as client:
+                    resp = await client.get(live_url)
+                    if resp.status_code == 200:
+                        feed = feedparser.parse(resp.text)
+                        for entry in feed.entries[:12]:
+                            pub = entry.get("published", "")
+                            e_title = entry.get("title", "").strip()
+                            if e_title and get_article_age_days(pub) <= 7.0:
+                                src_name = getattr(getattr(entry, "source", None), "title", "Google News") or "СМИ"
+                                raw_sum = entry.get("summary", "")
+                                clean_sum = re.sub(r'<[^>]+>', ' ', raw_sum).strip()
+                                clean_sum = re.sub(r'\s+', ' ', clean_sum)
+                                custom_live_articles.append({
+                                    "title": e_title,
+                                    "source": src_name,
+                                    "published": pub,
+                                    "pub_date": format_pub_date(pub),
+                                    "summary": clean_sum[:240],
+                                    "link": entry.get("link", ""),
+                                })
+            except Exception as e:
+                logger.warning(f"Failed to fetch live search for topic '{clean_topic}': {e}")
+
+    available_catalog = []
+    if cat_info:
+        available_catalog = [ang for ang in cat_info.get("sub_angles", []) if ang["id"] not in all_excluded]
+        if not available_catalog:
+            logger.info(f"All catalog angles for '{cat_id}' are in history. Recycling catalog angles for new cycle.")
+            available_catalog = list(cat_info.get("sub_angles", []))
+            all_excluded = set()
+    elif not clean_topic:
+        # When topic is empty and no category specified, show a balanced selection across German channels
+        target_cats = ["pflege_gesundheit_de", "rente_soziales_de", "migration_de"] if lang == "de" else ["ru_politics"]
+        for cid in target_cats:
+            c_info = ACUTE_TOPIC_CATALOG.get(cid, {})
+            c_angles = [ang for ang in c_info.get("sub_angles", []) if ang["id"] not in all_excluded]
+            if not c_angles:
+                c_angles = list(c_info.get("sub_angles", []))
+            available_catalog.extend(c_angles[:4])
 
     fresh_cards_pool = []
     used_live_articles = set()
@@ -1819,6 +1888,33 @@ async def get_acute_topics_preview(
     # Build map of matched live headlines
     matched_map = {ang["id"]: arts for ang, arts in catalog_matched}
 
+    # 0. Prepend direct live articles from explicit user search (highest priority)
+    for art in custom_live_articles:
+        art_title = art["title"]
+        slug = re.sub(r'[^a-zA-Z0-9]', '_', art_title)[:24].strip('_').lower()
+        dynamic_id = f"live_{slug}_{abs(hash(art_title)) % 100000}"
+        if dynamic_id in all_excluded:
+            continue
+        hk_de, hk_ru = random.choice(HOOK_PRESETS)
+        fresh_cards_pool.append({
+            "id": dynamic_id,
+            "title": art_title,
+            "title_ru": "",
+            "desc_ru": art.get("summary", ""),
+            "badge": f"🔥 {art.get('source', 'СМИ')}",
+            "topic_query": art_title,
+            "hook_sample": hk_de,
+            "hook_sample_ru": hk_ru,
+            "live_headline": art_title,
+            "live_headline_ru": "",
+            "live_source": art.get("source", "СМИ"),
+            "live_pub_date": art.get("pub_date", ""),
+            "live_summary": art.get("summary", ""),
+            "live_articles": [art],
+            "is_recent": True,
+            "is_live_dynamic": True,
+        })
+
     # 1. First add catalog angles with confirmed live news attached (highest freshness)
     for ang in available_catalog:
         if ang["id"] in matched_map:
@@ -1873,17 +1969,7 @@ async def get_acute_topics_preview(
                 "is_live_dynamic": False,
             })
 
-    # Presets for punchy clickbait hooks on dynamic live cards
-    HOOK_PRESETS = [
-        ("AKTUELLE ENTWICKLUNG", "СРОЧНЫЕ ДЕТАЛИ"),
-        ("NEUE ENTHÜLLUNG", "НОВЫЕ ПОДРОБНОСТИ"),
-        ("ENTSCHEIDUNG GEFALLEN", "РЕШЕНИЕ ПРИНЯТО"),
-        ("GROSSER WENDEPUNKT", "РЕЗКИЙ ПОВОРОТ"),
-        ("DAS VERSTECKTE DETAIL", "СКРЫТАЯ ДЕТАЛЬ"),
-        ("DRINGENDE WARNUNG", "ТРЕВОЖНЫЙ СИГНАЛ"),
-        ("OFFIZIELLE ZAHLEN", "ОФИЦИАЛЬНЫЕ ЦИФРЫ"),
-        ("SKANDAL-DEBATTE", "ОСТРЫЙ СПОР"),
-    ]
+    # Presets for punchy clickbait hooks on dynamic live cards (defined globally)
 
     # Add dynamic fresh cards from relevant_fresh_live
     for art in relevant_fresh_live:

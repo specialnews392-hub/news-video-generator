@@ -2927,6 +2927,25 @@ let currentAcuteTopicsList = [];
 let acuteCurrentOffset = 0;
 let acuteExcludedIds = new Set();
 
+let currentAcuteCategory = "";
+
+function setAcuteChannelFilter(cat) {
+    window.currentAcuteCategory = cat;
+    document.querySelectorAll(".btn-channel-filter").forEach(btn => {
+        const isMatch = (btn.dataset.cat === cat) || (cat === "" && btn.id === "filterAcuteAll");
+        btn.classList.toggle("active", isMatch);
+        if (isMatch) {
+            btn.style.boxShadow = "0 0 10px rgba(59, 130, 246, 0.4)";
+            btn.style.borderWidth = "2px";
+        } else {
+            btn.style.boxShadow = "none";
+            btn.style.borderWidth = "1px";
+        }
+    });
+    acuteCurrentOffset = 0;
+    openAcuteTopicsModal(false);
+}
+
 async function openAcuteTopicsModal(isNext = false) {
     const modal = document.getElementById('acuteTopicsModal');
     if (!modal) return;
@@ -2965,7 +2984,7 @@ async function openAcuteTopicsModal(isNext = false) {
 
     try {
         const excludeParam = Array.from(acuteExcludedIds).join(',');
-        const resp = await fetch(`/api/topics/acute?topic=${encodeURIComponent(currentTopic)}&lang=${lang}&offset=${acuteCurrentOffset}&exclude_ids=${encodeURIComponent(excludeParam)}`);
+        const resp = await fetch(`/api/topics/acute?topic=${encodeURIComponent(currentTopic)}&lang=${lang}&offset=${acuteCurrentOffset}&exclude_ids=${encodeURIComponent(excludeParam)}&category=${encodeURIComponent(window.currentAcuteCategory || "")}`);
         if (!resp.ok) throw new Error('Не удалось получить острые сюжеты');
         const data = await resp.json();
 

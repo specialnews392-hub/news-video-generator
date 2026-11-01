@@ -938,12 +938,13 @@ async def get_acute_topics(
     topic: str = "",
     lang: str = "de",
     offset: int = 0,
-    exclude_ids: str = ""
+    exclude_ids: str = "",
+    category: str = ""
 ):
     """Get live acute topics and investigative sub-angles for broad topics."""
     from services.news_fetcher import get_acute_topics_preview
     ex_list = [x.strip() for x in exclude_ids.split(",") if x.strip()] if exclude_ids else []
-    result = await get_acute_topics_preview(topic=topic, lang=lang, offset=offset, exclude_ids=ex_list)
+    result = await get_acute_topics_preview(topic=topic, lang=lang, offset=offset, exclude_ids=ex_list, category=category)
     return {"status": "ok", **result}
 
 
