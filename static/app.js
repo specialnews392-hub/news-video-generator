@@ -250,7 +250,13 @@ async function startGeneration() {
             transitions: transitionsMode ? transitionsMode.checked : true,
             review_slides: document.getElementById('reviewSlidesMode') ? document.getElementById('reviewSlidesMode').checked : false,
             acute_angle_id: selectedAcuteAngleId || '',
+            target_article_url: selectedTargetArticle ? (selectedTargetArticle.link || '') : '',
+            target_article_title: selectedTargetArticle ? (selectedTargetArticle.title || '') : '',
+            target_article_summary: selectedTargetArticle ? (selectedTargetArticle.summary || '') : '',
+            target_article_source: selectedTargetArticle ? (selectedTargetArticle.source || '') : '',
         };
+        // Reset single-use target article after building payload
+        selectedTargetArticle = null;
 
         if (isBatch) {
             response = await fetch('/api/generate-batch', {
@@ -3190,11 +3196,13 @@ function closeAcuteTopicsModal(e) {
 }
 
 let selectedAcuteAngleId = '';
+let selectedTargetArticle = null;
 
 if (topicInput) {
     topicInput.addEventListener('input', () => {
-        // If user manually edits topic, clear preset acute angle id
+        // If user manually edits topic, clear preset acute angle id and target article
         selectedAcuteAngleId = '';
+        selectedTargetArticle = null;
     });
 }
 
@@ -3420,14 +3428,15 @@ function updateConfirmModalUI() {
     }
 
     if (chosenHeadline) {
-        chosenHeadline = chosenHeadline.replace(/\s*[-–—|]\s*(Tagesschau|Spiegel|Welt|Focus|Bild|ZDF|FAZ|SZ|N-TV|Zeit|Lenta|РИА Новости|ТАСС|Интерфакс|Коммерсантъ).*$/i, '').trim();
+        chosenHeadline = chosenHeadline.replace(/\s*[-–—|]\s*(?:[A-Za-zА-Яа-я0-9\s.]+ (?:Zeitung|Presse|Online|Post|Tageblatt)|Tagesschau|Spiegel|Welt|Focus|Bild|ZDF|FAZ|SZ|N-TV|Zeit|Lenta|РИА Новости|ТАСС|Интерфакс|Коммерсантъ|Hessenschau|MDR|NDR|WDR|BR|SWR|RBB|ORF|inside digital|Gegen Hartz IV|[A-Za-z0-9.-]+\.[a-z]{2,3}).*$/i, '').trim();
     }
 
     currentPendingSelection = {
         item: item,
         mode: currentConfirmMode,
         chosenTitle: chosenHeadline,
-        angleId: item.id || ''
+        angleId: item.id || '',
+        targetArticle: (currentConfirmMode === 'live_news' && curArt && (curArt.link || curArt.title)) ? curArt : null
     };
 
     if (elHeadlineRu) {
@@ -3493,8 +3502,9 @@ function backToAcuteTopicsModal() {
 
 async function approveAndStartGeneration() {
     if (!currentPendingSelection) return;
-    const { item, chosenTitle, angleId } = currentPendingSelection;
+    const { item, chosenTitle, angleId, targetArticle } = currentPendingSelection;
     selectedAcuteAngleId = angleId || '';
+    selectedTargetArticle = targetArticle || null;
 
     // Mark acute angle as selected
     try {

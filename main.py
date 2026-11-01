@@ -109,6 +109,10 @@ class VideoRequest(BaseModel):
     transitions: bool = True  # Smooth slide crossfade transitions
     review_slides: bool = False  # Interactive slide moderation/replacement before compiling video
     acute_angle_id: str = ""  # Targeted acute sub-angle ID if chosen in UI
+    target_article_url: str = ""
+    target_article_title: str = ""
+    target_article_summary: str = ""
+    target_article_source: str = ""
 
 
 class BatchVideoRequest(BaseModel):
@@ -242,6 +246,11 @@ async def start_generation(req: VideoRequest, background_tasks: BackgroundTasks)
         "voice_rate": req.voice_rate,
         "is_preview": req.is_preview,
         "target_length": req.target_length,
+        "acute_angle_id": getattr(req, "acute_angle_id", ""),
+        "target_article_url": getattr(req, "target_article_url", ""),
+        "target_article_title": getattr(req, "target_article_title", ""),
+        "target_article_summary": getattr(req, "target_article_summary", ""),
+        "target_article_source": getattr(req, "target_article_source", ""),
         "theme": req.theme,
         "ken_burns": req.ken_burns,
         "transitions": req.transitions,
@@ -1939,6 +1948,10 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
             lang=req.language,
             newsapi_key=config.NEWSAPI_KEY,
             acute_angle_id=req.acute_angle_id,
+            target_article_url=getattr(req, "target_article_url", ""),
+            target_article_title=getattr(req, "target_article_title", ""),
+            target_article_summary=getattr(req, "target_article_summary", ""),
+            target_article_source=getattr(req, "target_article_source", ""),
         )
         
         _check_cancelled()

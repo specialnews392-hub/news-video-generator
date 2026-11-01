@@ -1008,7 +1008,7 @@ async def fetch_google_news(topic: str, lang: str = "ru", max_results: int = 30)
     if not clean_topic:
         clean_topic = topic.strip()
         
-    queries = [f"{clean_topic} when:2d", f"{clean_topic} when:3d"]
+    queries = [f"{clean_topic} when:2d", f"{clean_topic} when:3d", f"{clean_topic} when:7d", clean_topic]
     
     # If topic has > 3 words, also add key query with the first 3 important words
     words = [w for w in clean_topic.split() if len(w) >= 3][:3]
@@ -1020,7 +1020,7 @@ async def fetch_google_news(topic: str, lang: str = "ru", max_results: int = 30)
     seen_links = set()
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
-    async def _execute_query(q: str, max_age_days: float = 4.5):
+    async def _execute_query(q: str, max_age_days: float = 7.0):
         encoded_topic = quote_plus(q)
         url = f"https://news.google.com/rss/search?q={encoded_topic}&hl={hl}&gl={gl}&ceid={gl}:{hl}"
         found = []
@@ -1377,7 +1377,7 @@ def _extract_keywords(text: str) -> tuple[set[str], set[str], set[str]]:
     stop_words = {
         "новости", "в", "на", "и", "с", "по", "для", "о", "об", "за", "из",
         "к", "от", "до", "про", "что", "как", "это", "world", "news", "the", "in", "of", "and",
-        "und", "der", "die", "das", "mit", "von", "aus", "für", "auf", "nach", "über", "im", "am", "zu"
+        "und", "der", "die", "das", "mit", "von", "aus", "für", "auf", "nach", "über", "im", "am", "zu", "zeitung", "wer", "doch", "bekommt", "gibt", "mehr", "immer", "warum", "wie", "jetzt", "was", "wo", "wann"
     }
     broad_categories = {
         "политика", "россия", "россии", "внутренняя", "внешняя", "новости",
@@ -1414,13 +1414,31 @@ def _extract_keywords(text: str) -> tuple[set[str], set[str], set[str]]:
     return all_kws, specific_kws, stems
 
 
-async def fetch_news(topic: str, lang: str = "ru", newsapi_key: str = "", acute_angle_id: str = "") -> list[dict]:
+async def fetch_news(
+    topic: str,
+    lang: str = "ru",
+    newsapi_key: str = "",
+    acute_angle_id: str = "",
+    target_article_url: str = "",
+    target_article_title: str = "",
+    target_article_summary: str = "",
+    target_article_source: str = "",
+) -> list[dict]:
     """
     Fetch news from targeted sources and agencies.
+    If a specific target article was chosen, it is guaranteed to be lead article #1.
     Automatically expands umbrella/broad topics into acute sub-angles to guarantee variety and sharpness.
     Filters out already used articles and previous video angles.
     """
-    all_kws, specific_kws, stems = _extract_keywords(topic)
+    # Clean topic of trailing source names like '- Berliner Zeitung', '- Tagesschau', etc.
+    search_topic = re.sub(
+        r'\s*[-–—|]\s*(?:[A-Za-zА-Яа-я0-9\s.]+ (?:Zeitung|Presse|Online|Post|Tageblatt)|Tagesschau|Spiegel|Welt|Focus|Bild|ZDF|FAZ|SZ|N-TV|Zeit|Lenta|РИА Новости|ТАСС|Интерфакс|Коммерсантъ|Hessenschau|MDR|NDR|WDR|BR|SWR|RBB|ORF|inside digital|Gegen Hartz IV|[A-Za-z0-9.-]+\.[a-z]{2,3}).*$',
+        '',
+        topic,
+        flags=re.IGNORECASE
+    ).strip() or topic
+
+    all_kws, specific_kws, stems = _extract_keywords(search_topic)
     logger.info(f"Ключевые слова темы: общие={all_kws}, специфические={specific_kws}, корни={stems}")
     
     # 1. Check for chosen acute sub-angle or umbrella topic expansion
@@ -1445,11 +1463,11 @@ async def fetch_news(topic: str, lang: str = "ru", newsapi_key: str = "", acute_
                 tasks.append(search_kommersant_news(specific_query, count=12))
                 tasks.append(search_lenta_news(specific_query, count=10))
                 
-        tasks.append(fetch_google_news(topic, lang=lang, max_results=30))
+        tasks.append(fetch_google_news(search_topic, lang=lang, max_results=30))
         tasks.append(fetch_direct_agency_feeds(lang=lang))
     else:
         # German / International
-        tasks.append(search_ddg_news(topic, lang=lang, max_results=20))
+        tasks.append(search_ddg_news(search_topic, lang=lang, max_results=20))
         tasks.append(fetch_google_news(topic, lang=lang, max_results=30))
         tasks.append(fetch_direct_agency_feeds(lang=lang))
         
@@ -1609,6 +1627,26 @@ async def fetch_news(topic: str, lang: str = "ru", newsapi_key: str = "", acute_
                 if len(fresh_articles) >= 6:
                     break
     
+    # Guarantee target lead article if provided
+    if target_article_url or target_article_title:
+        lead_art = {
+            "title": target_article_title or search_topic or topic,
+            "link": target_article_url,
+            "summary": target_article_summary or "",
+            "source": target_article_source or "Целевой первоисточник",
+            "published": datetime.now(timezone.utc).isoformat(),
+            "is_primary_search": True,
+            "is_target_lead": True,
+            "relevance_score": 999999
+        }
+        if acute_angle:
+            lead_art["acute_angle_id"] = acute_angle["id"]
+            lead_art["acute_angle_title"] = acute_angle["title"]
+        # Prepend to front
+        fresh_articles = [a for a in fresh_articles if a.get("link") != target_article_url]
+        fresh_articles.insert(0, lead_art)
+        logger.info(f"Целевая статья пользователя закреплена как главная тема #1: {lead_art['title']}")
+
     # Sort candidates by relevance score descending
     fresh_articles.sort(key=lambda a: a.get("relevance_score", 0), reverse=True)
     candidates_to_enrich = fresh_articles[:20]
@@ -1652,6 +1690,14 @@ async def fetch_news(topic: str, lang: str = "ru", newsapi_key: str = "", acute_
                 pa["text_len"] = len(pa["full_text"])
                 pa["preview"] = pa["full_text"]
             articles_with_text.append(pa)
+            
+    # If target lead article is present, ensure it has adequate text from summary if extractor yielded little
+    for a in articles_with_text:
+        if a.get("is_target_lead") and len(a.get("full_text", "")) < 200:
+            if target_article_summary:
+                a["full_text"] = (a.get("full_text", "") + "\n" + target_article_summary).strip()
+                a["text_len"] = len(a["full_text"])
+                a["preview"] = a["full_text"][:300]
 
     # Strictly sort by relevance score descending so the exact matching article is #1
     articles_with_text.sort(key=lambda a: a.get("relevance_score", 0), reverse=True)
