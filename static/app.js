@@ -3360,10 +3360,12 @@ function updateConfirmModalUI() {
     let sourceName = '';
     let freshnessText = '';
     let descText = '';
+    let selectedTargetArt = null;
 
     if (currentConfirmMode === 'live_news' && hasLive) {
         const curIdx = item.active_art_idx || 0;
         const curArt = articles[curIdx] || articles[0];
+        selectedTargetArt = curArt;
 
         headlineOrig = curArt.title;
         headlineRu = curArt.title_ru || curArt.title;
@@ -3439,7 +3441,7 @@ function updateConfirmModalUI() {
         mode: currentConfirmMode,
         chosenTitle: chosenHeadline,
         angleId: item.id || '',
-        targetArticle: (currentConfirmMode === 'live_news' && curArt && (curArt.link || curArt.title)) ? curArt : null
+        targetArticle: (currentConfirmMode === 'live_news' && selectedTargetArt && (selectedTargetArt.link || selectedTargetArt.title)) ? selectedTargetArt : null
     };
 
     if (elHeadlineRu) {

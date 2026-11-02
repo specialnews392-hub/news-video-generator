@@ -761,7 +761,7 @@ async def download_file(job_id: str, file_type: str):
     if job["status"] != "completed":
         raise HTTPException(status_code=400, detail="Job not completed yet")
     
-    result = job.get("result", {})
+    result = job.get("result") or {}
     
     if file_type == "video":
         path = result.get("video_path")
@@ -830,7 +830,7 @@ async def get_job_thumbnail(job_id: str):
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
     job = jobs[job_id]
-    result = job.get("result", {})
+    result = job.get("result") or {}
     path = result.get("thumbnail_path") or (config.OUTPUT_DIR / job_id / "thumbnail.jpg")
     p = Path(path)
     if not p.exists():
@@ -1017,7 +1017,7 @@ async def get_thumbnail_candidates(job_id: str, query: str = ""):
     job = jobs[job_id]
     job_dir = config.OUTPUT_DIR / job_id
     script_data = job.get("script_data", {})
-    result = job.get("result", {})
+    result = job.get("result") or {}
 
     active_query = query.strip()
     if not active_query:
@@ -1063,7 +1063,7 @@ async def regenerate_thumbnail(job_id: str, req: ThumbnailRegenRequest):
         raise HTTPException(status_code=404, detail="Job not found")
     job = jobs[job_id]
     script_data = job.get("script_data", {})
-    result = job.get("result", {})
+    result = job.get("result") or {}
     job_dir = config.OUTPUT_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     thumbnail_path = job_dir / "thumbnail.jpg"

@@ -34,7 +34,7 @@ ACUTE_TOPIC_CATALOG = {
     "migration_de": {
         "name": "Migration & Asylpolitik Deutschland",
         "patterns": [
-            "migrat", "migration", "asyl", "flücht", "abschieb", "grenzkontroll", "grenze", "grenzen",
+            "migrat", "migran", "migrant", "migranten", "migration", "asyl", "flücht", "flucht", "geflücht", "gefluecht", "abschieb", "ausländer", "auslaender", "grenzkontroll", "grenze", "grenzen",
             "einwander", "zuwander", "geas", "bamf", "dublin", "bezahlkarte", "schengen", "schleuser"
         ],
         "sub_angles": [
@@ -754,10 +754,15 @@ def identify_acute_cluster(topic: str) -> tuple[str, dict | None]:
     if not topic:
         return "", None
     t_lower = topic.lower().strip()
+    words = [w for w in re.sub(r'[^a-zA-ZäöüßА-Яа-яё0-9]', ' ', t_lower).split() if len(w) >= 3]
     for cat_id, cat_info in ACUTE_TOPIC_CATALOG.items():
-        for pat in cat_info.get("patterns", []):
+        patterns = cat_info.get("patterns", [])
+        for pat in patterns:
             if pat in t_lower:
                 return cat_id, cat_info
+            for w in words:
+                if pat.startswith(w) or w.startswith(pat):
+                    return cat_id, cat_info
     return "", None
 
 
@@ -1772,7 +1777,9 @@ async def get_acute_topics_preview(
         if a.get("title") and get_article_age_days(a.get("published", "")) <= MAX_AGE_DAYS
     ]
 
-    cluster_patterns = cat_info.get("patterns", [])
+    cluster_patterns = (cat_info.get("patterns", []) if cat_info else [])
+    if not cluster_patterns and clean_topic:
+        cluster_patterns = [w for w in re.sub(r'[^a-zA-ZäöüßА-Яа-яё0-9]', ' ', clean_topic.lower()).split() if len(w) >= 3]
     relevant_fresh_live = [
         a for a in strictly_fresh_live
         if not cluster_patterns or any(p in a.get("title", "").lower() for p in cluster_patterns)
