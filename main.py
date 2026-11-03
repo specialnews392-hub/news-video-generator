@@ -2034,13 +2034,13 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
             except Exception as e:
                 logger.warning(f"Failed to save script_data.json: {e}")
         
-        if script_data.get("visual_plan_version") != 2:
+        if script_data.get("visual_plan_version") != 3:
             from services.visual_plan import build_visual_segments
             paragraphs = script_data.get("paragraphs") or script_data.get("segments") or []
             script_data["segments"], script_data["search_queries"] = build_visual_segments(
                 paragraphs, script_data.get("visual_plan", []), req.topic
             )
-            script_data["visual_plan_version"] = 2
+            script_data["visual_plan_version"] = 3
 
         main_lead = script_data.get("main_lead_story", "")
 

@@ -422,7 +422,7 @@ async def generate_script(
                 segments, queries = build_visual_segments(
                     paragraphs, result.get("visual_plan", []), topic
                 )
-                result["visual_plan_version"] = 2
+                result["visual_plan_version"] = 3
 
                 # Enforce title uniqueness and sanitize repetitive cliches
                 raw_title = result.get("title", "").strip()

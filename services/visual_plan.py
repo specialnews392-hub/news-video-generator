@@ -4,27 +4,96 @@ from pathlib import Path
 from services.query_helper import sanitize_segment_query, extract_topic_core, contains_forbidden_objects
 
 
+def split_text_into_short_segments(text: str, max_words: int = 12, max_chars: int = 85) -> list[str]:
+    """Split any paragraph into short visual segments guaranteed to be <= 6-7s narration."""
+    text = re.sub(r'\s+', ' ', text).strip()
+    if not text:
+        return []
+
+    # Step 1: Split by sentence delimiters [.!?…]
+    raw_sentences = [s.strip() for s in re.split(r'(?<=[.!?…])\s+', text) if s.strip()]
+
+    # Clause boundary pattern (colons, semicolons, dashes, commas + conjunctions, or simple commas)
+    clause_pattern = re.compile(
+        r'(?<=[:;—–])\s+|'
+        r'(?<=,)\s+(?=(?:dass|weil|obwohl|während|wenn|da|wie|um|jedoch|sondern|aber|sowie|und|oder|welche|welcher|welches|die|der|das|den|dem|что|когда|который|если|чтобы)\b)|'
+        r'(?<=,)\s+'
+    , re.IGNORECASE)
+
+    pieces = []
+    for s in raw_sentences:
+        s_words = s.split()
+        if len(s_words) <= max_words and len(s) <= max_chars:
+            pieces.append(s)
+            continue
+
+        clauses = [c.strip() for c in clause_pattern.split(s) if c.strip()]
+        for c in clauses:
+            c_words = c.split()
+            if len(c_words) <= max_words and len(c) <= max_chars:
+                pieces.append(c)
+                continue
+
+            # Sub-split long clauses by conjunctions / prepositions or word count
+            sub_splits = re.split(r'\s+(?=(?:und|oder|aber|sowie|sowie auch|mit|für|durch|bei|über|in|nach|vor)\b)', c, flags=re.IGNORECASE)
+            cur_chunk = ''
+            for sub in sub_splits:
+                sub = sub.strip()
+                if not sub:
+                    continue
+                if cur_chunk and (len((cur_chunk + ' ' + sub).split()) > max_words or len(cur_chunk + ' ' + sub) > max_chars):
+                    pieces.append(cur_chunk.strip())
+                    cur_chunk = sub
+                else:
+                    cur_chunk = (cur_chunk + ' ' + sub).strip()
+            if cur_chunk:
+                pieces.append(cur_chunk.strip())
+
+    # Final pass: Ensure strictly no piece exceeds max_words (split at ~8-10 words)
+    final_segments = []
+    for p in pieces:
+        p_words = p.split()
+        if len(p_words) <= max_words and len(p) <= max_chars:
+            final_segments.append(p)
+        else:
+            chunk_size = min(max_words, 9)
+            for i in range(0, len(p_words), chunk_size):
+                final_segments.append(' '.join(p_words[i:i + chunk_size]))
+
+    # Merge very tiny fragments (1-2 words) with previous segment if they fit
+    merged = []
+    for seg in final_segments:
+        if merged and len(seg.split()) <= 2 and (len(merged[-1].split()) + len(seg.split()) <= max_words) and (len(merged[-1]) + len(seg) + 1 <= max_chars):
+            merged[-1] = (merged[-1] + ' ' + seg).strip()
+        else:
+            merged.append(seg)
+
+    return merged
+
+
 def build_visual_segments(paragraphs, visual_plan, topic):
+    """Build dynamic visual segments for slides, strictly capping each slide to 4-7 seconds."""
     plans = {}
     for item in visual_plan or []:
         idx = item.get('paragraph_index')
         if isinstance(idx, int) and not isinstance(idx, bool) and 0 <= idx < len(paragraphs):
             plans.setdefault(idx, item)
+
     segments, queries = [], []
     for idx, paragraph in enumerate(paragraphs):
         plan = plans.get(idx, {})
-        query = plan.get('search_query') or plan.get('visual') or topic
-        # Keep complete sentences together: avoid illustrating isolated clauses.
-        group = ''
-        for sentence in re.split(r'(?<=[.!?…])\s+', paragraph.strip()):
-            if group and len(group) + len(sentence) > 160:
-                segments.append(group)
-                queries.append(query)
-                group = ''
-            group = (group + ' ' + sentence).strip()
-        if group:
-            segments.append(group)
-            queries.append(query)
+        base_query = plan.get('search_query') or plan.get('visual') or topic
+
+        # Split paragraph into short segments guaranteed to not exceed 6-7 seconds (max ~12 words, ~85 chars)
+        sub_segs = split_text_into_short_segments(paragraph, max_words=12, max_chars=85)
+        for sub_idx, sub_text in enumerate(sub_segs):
+            segments.append(sub_text)
+            if sub_idx == 0:
+                queries.append(base_query)
+            else:
+                sub_q = sanitize_segment_query(base_query, topic=topic, index=sub_idx, segment_text=sub_text)
+                queries.append(sub_q or base_query)
+
     return segments, queries
 
 
