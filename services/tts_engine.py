@@ -390,61 +390,27 @@ def _calculate_segment_timings_from_boundaries(
     total_duration_ms: float,
 ) -> list[dict]:
     """
-    Calculate start/end times for each visual slide segment using speech boundary times.
-    Prevents slide 0 from disappearing early and ensures slide transitions align
-    naturally with spoken sentences.
+    Calculate start/end times for each visual slide segment.
+    Evenly distributes narration time across slides (~6.0s fixed pacing)
+    so that no slide flashes for 1.5s or hangs for 16s.
     """
     if not segments:
         return []
-        
-    total_chars = max(1, sum(len(s) for s in segments))
-    if not all_boundaries:
-        cur_ms = 0.0
-        timings = []
-        for seg in segments:
-            seg_dur = total_duration_ms * (len(seg) / total_chars)
-            timings.append({
-                "start_ms": cur_ms,
-                "end_ms": cur_ms + seg_dur,
-                "duration_ms": seg_dur,
-            })
-            cur_ms += seg_dur
-        return timings
 
-    seg_cum_ratios = []
-    cum = 0
-    for s in segments:
-        cum += len(s)
-        seg_cum_ratios.append(cum / total_chars)
-        
-    b_ends = [b["start_ms"] + b["dur_ms"] for b in all_boundaries]
-    max_audio_ms = max(total_duration_ms, b_ends[-1] if b_ends else 0)
-    
+    num_segs = len(segments)
+    avg_dur = total_duration_ms / num_segs
+
     timings = []
-    prev_end_ms = 0.0
-    
-    for i, seg in enumerate(segments):
-        if i == len(segments) - 1:
-            end_ms = max_audio_ms
-        else:
-            target_ms = max_audio_ms * seg_cum_ratios[i]
-            closest_b_end = min(b_ends, key=lambda t: abs(t - target_ms))
-            if abs(closest_b_end - target_ms) < 3000 and closest_b_end > prev_end_ms + 1500:
-                end_ms = closest_b_end
-            else:
-                end_ms = target_ms
-                
-            if end_ms - prev_end_ms < 2000 and i < len(segments) - 1:
-                end_ms = prev_end_ms + 2500
-                
-        dur_ms = max(1500, end_ms - prev_end_ms)
+    for i in range(num_segs):
+        start_ms = i * avg_dur
+        end_ms = (i + 1) * avg_dur if i < num_segs - 1 else total_duration_ms
+        dur_ms = end_ms - start_ms
         timings.append({
-            "start_ms": prev_end_ms,
+            "start_ms": start_ms,
             "end_ms": end_ms,
             "duration_ms": dur_ms,
         })
-        prev_end_ms = end_ms
-        
+
     return timings
 
 

@@ -2034,13 +2034,13 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
             except Exception as e:
                 logger.warning(f"Failed to save script_data.json: {e}")
         
-        if script_data.get("visual_plan_version") != 3:
+        if script_data.get("visual_plan_version") != 4:
             from services.visual_plan import build_visual_segments
             paragraphs = script_data.get("paragraphs") or script_data.get("segments") or []
             script_data["segments"], script_data["search_queries"] = build_visual_segments(
                 paragraphs, script_data.get("visual_plan", []), req.topic
             )
-            script_data["visual_plan_version"] = 3
+            script_data["visual_plan_version"] = 4
 
         main_lead = script_data.get("main_lead_story", "")
 
@@ -2307,7 +2307,7 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
 
         slides_data = []
         for s_idx, s_path in enumerate(image_paths):
-            dur_ms = segment_timings[s_idx]["duration_ms"] if (s_idx < len(segment_timings)) else 5000
+            dur_ms = segment_timings[s_idx]["duration_ms"] if (s_idx < len(segment_timings)) else 6000
             s_text = script_data["segments"][s_idx] if (s_idx < len(script_data["segments"])) else ""
             s_q = search_queries[s_idx] if (s_idx < len(search_queries)) else req.topic
             slides_data.append({

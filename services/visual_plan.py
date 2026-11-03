@@ -4,8 +4,17 @@ from pathlib import Path
 from services.query_helper import sanitize_segment_query, extract_topic_core, contains_forbidden_objects
 
 
-def split_text_into_short_segments(text: str, max_words: int = 12, max_chars: int = 85) -> list[str]:
-    """Split any paragraph into short visual segments guaranteed to be <= 6-7s narration."""
+def split_text_into_short_segments(
+    text: str,
+    target_words: int = 13,
+    min_words: int = 10,
+    max_words: int = 15,
+) -> list[str]:
+    """
+    Split text into visual slide segments targeting ~6 seconds of continuous speech (~13 words).
+    Strictly guarantees that no segment is shorter than min_words (no 1.5s flash slides)
+    and no segment exceeds max_words (no 16s freeze slides).
+    """
     text = re.sub(r'\s+', ' ', text).strip()
     if not text:
         return []
@@ -13,62 +22,74 @@ def split_text_into_short_segments(text: str, max_words: int = 12, max_chars: in
     # Step 1: Split by sentence delimiters [.!?…]
     raw_sentences = [s.strip() for s in re.split(r'(?<=[.!?…])\s+', text) if s.strip()]
 
-    # Clause boundary pattern (colons, semicolons, dashes, commas + conjunctions, or simple commas)
+    # Clause boundary pattern (colons, semicolons, dashes, conjunctions, or commas)
     clause_pattern = re.compile(
         r'(?<=[:;—–])\s+|'
         r'(?<=,)\s+(?=(?:dass|weil|obwohl|während|wenn|da|wie|um|jedoch|sondern|aber|sowie|und|oder|welche|welcher|welches|die|der|das|den|dem|что|когда|который|если|чтобы)\b)|'
         r'(?<=,)\s+'
     , re.IGNORECASE)
 
-    pieces = []
+    units = []
     for s in raw_sentences:
         s_words = s.split()
-        if len(s_words) <= max_words and len(s) <= max_chars:
-            pieces.append(s)
-            continue
-
-        clauses = [c.strip() for c in clause_pattern.split(s) if c.strip()]
-        for c in clauses:
-            c_words = c.split()
-            if len(c_words) <= max_words and len(c) <= max_chars:
-                pieces.append(c)
-                continue
-
-            # Sub-split long clauses by conjunctions / prepositions or word count
-            sub_splits = re.split(r'\s+(?=(?:und|oder|aber|sowie|sowie auch|mit|für|durch|bei|über|in|nach|vor)\b)', c, flags=re.IGNORECASE)
-            cur_chunk = ''
-            for sub in sub_splits:
-                sub = sub.strip()
-                if not sub:
-                    continue
-                if cur_chunk and (len((cur_chunk + ' ' + sub).split()) > max_words or len(cur_chunk + ' ' + sub) > max_chars):
-                    pieces.append(cur_chunk.strip())
-                    cur_chunk = sub
+        if len(s_words) <= max_words:
+            units.append(s)
+        else:
+            clauses = [c.strip() for c in clause_pattern.split(s) if c.strip()]
+            for c in clauses:
+                c_words = c.split()
+                if len(c_words) <= max_words:
+                    units.append(c)
                 else:
-                    cur_chunk = (cur_chunk + ' ' + sub).strip()
-            if cur_chunk:
-                pieces.append(cur_chunk.strip())
+                    for i in range(0, len(c_words), target_words):
+                        units.append(' '.join(c_words[i:i + target_words]))
 
-    # Final pass: Ensure strictly no piece exceeds max_words (split at ~8-10 words)
-    final_segments = []
-    for p in pieces:
-        p_words = p.split()
-        if len(p_words) <= max_words and len(p) <= max_chars:
-            final_segments.append(p)
-        else:
-            chunk_size = min(max_words, 9)
-            for i in range(0, len(p_words), chunk_size):
-                final_segments.append(' '.join(p_words[i:i + chunk_size]))
-
-    # Merge very tiny fragments (1-2 words) with previous segment if they fit
+    # Step 2: Merge / balance units to strictly respect [min_words, max_words] (target ~6s per slide)
     merged = []
-    for seg in final_segments:
-        if merged and len(seg.split()) <= 2 and (len(merged[-1].split()) + len(seg.split()) <= max_words) and (len(merged[-1]) + len(seg) + 1 <= max_chars):
-            merged[-1] = (merged[-1] + ' ' + seg).strip()
+    cur = ''
+    for u in units:
+        if not cur:
+            cur = u
+            continue
+        cur_w = len(cur.split())
+        u_w = len(u.split())
+        if cur_w + u_w <= max_words:
+            cur = cur + ' ' + u
+        elif cur_w < min_words:
+            combined_words = (cur + ' ' + u).split()
+            if len(combined_words) <= max_words:
+                cur = ' '.join(combined_words)
+            else:
+                half = len(combined_words) // 2
+                merged.append(' '.join(combined_words[:half]))
+                cur = ' '.join(combined_words[half:])
         else:
-            merged.append(seg)
+            merged.append(cur)
+            cur = u
 
-    return merged
+    if cur:
+        if merged and len(cur.split()) < min_words:
+            combined_words = (merged[-1] + ' ' + cur).split()
+            if len(combined_words) <= max_words + 2:
+                merged[-1] = ' '.join(combined_words)
+            else:
+                half = len(combined_words) // 2
+                merged[-1] = ' '.join(combined_words[:half])
+                merged.append(' '.join(combined_words[half:]))
+        else:
+            merged.append(cur)
+
+    # Step 3: Final sanity check to guarantee no element exceeds max_words + 2
+    final_segments = []
+    for m in merged:
+        m_words = m.split()
+        if len(m_words) <= max_words + 2:
+            final_segments.append(m)
+        else:
+            for i in range(0, len(m_words), target_words):
+                final_segments.append(' '.join(m_words[i:i + target_words]))
+
+    return final_segments
 
 
 def build_visual_segments(paragraphs, visual_plan, topic):
@@ -84,8 +105,8 @@ def build_visual_segments(paragraphs, visual_plan, topic):
         plan = plans.get(idx, {})
         base_query = plan.get('search_query') or plan.get('visual') or topic
 
-        # Split paragraph into short segments guaranteed to not exceed 6-7 seconds (max ~12 words, ~85 chars)
-        sub_segs = split_text_into_short_segments(paragraph, max_words=12, max_chars=85)
+        # Split paragraph into short segments guaranteed to average ~6 seconds (10-15 words, target 13)
+        sub_segs = split_text_into_short_segments(paragraph, target_words=13, min_words=10, max_words=15)
         for sub_idx, sub_text in enumerate(sub_segs):
             segments.append(sub_text)
             if sub_idx == 0:

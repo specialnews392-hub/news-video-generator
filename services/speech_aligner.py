@@ -241,69 +241,26 @@ def _align_slide_timings(
     total_duration_ms: float,
 ) -> list[dict]:
     """
-    Calculate slide changeover timings by aligning slide text to recognized words.
-    Guarantees strict monotonicity and eliminates slide drift.
+    Calculate slide changeover timings for visual slides.
+    Evenly distributes narration time across slides (~6.0s fixed pacing)
+    so that no slide flashes for 1.5s or hangs for 16s.
     """
     if not segments:
         return []
 
-    if not words:
-        # Fallback to even character distribution if no words recognized
-        tot_chars = max(1, sum(len(s) for s in segments))
-        cur = 0.0
-        timings = []
-        for s in segments:
-            dur = total_duration_ms * (len(s) / tot_chars)
-            timings.append({
-                "start_ms": float(cur),
-                "end_ms": float(cur + dur),
-                "duration_ms": float(max(1000.0, dur)),
-            })
-            cur += dur
-        return timings
+    num_segs = len(segments)
+    avg_dur = total_duration_ms / num_segs
 
     slide_timings = []
-    w_idx = 0
-    prev_end_ms = 0.0
-
-    for i, slide in enumerate(segments):
-        slide_tokens = [_normalize_word(x) for x in slide.split() if _normalize_word(x)]
-        count = len(slide_tokens)
-
-        if i == len(segments) - 1:
-            end_ms = max(total_duration_ms, prev_end_ms + 1000.0)
-        else:
-            target_token = slide_tokens[-1] if slide_tokens else ""
-            target_idx = min(len(words) - 1, w_idx + max(1, count) - 1)
-
-            # Search a window around target_idx for matching token
-            best_idx = target_idx
-            min_dist = 999
-            for cand in range(max(0, target_idx - 4), min(len(words), target_idx + 5)):
-                if _normalize_word(words[cand]["word"]) == target_token:
-                    if abs(cand - target_idx) < min_dist:
-                        min_dist = abs(cand - target_idx)
-                        best_idx = cand
-
-            # Transition point: when the NEXT slide's speech begins, or when this slide's last word ends
-            if best_idx < len(words) - 1:
-                end_ms = words[best_idx + 1]["start_ms"]
-            else:
-                end_ms = words[best_idx]["end_ms"]
-
-            w_idx = best_idx + 1
-
-        # Safety checks: ensure slide stays on screen at least 1.5s and is strictly increasing
-        if end_ms <= prev_end_ms + 1000.0:
-            end_ms = prev_end_ms + 1500.0
-
-        dur_ms = float(end_ms - prev_end_ms)
+    for i in range(num_segs):
+        start_ms = i * avg_dur
+        end_ms = (i + 1) * avg_dur if i < num_segs - 1 else total_duration_ms
+        dur_ms = end_ms - start_ms
         slide_timings.append({
-            "start_ms": float(prev_end_ms),
+            "start_ms": float(start_ms),
             "end_ms": float(end_ms),
-            "duration_ms": dur_ms,
+            "duration_ms": float(dur_ms),
         })
-        prev_end_ms = float(end_ms)
 
     return slide_timings
 
