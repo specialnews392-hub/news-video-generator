@@ -15,6 +15,8 @@ import traceback
 from datetime import datetime
 import time
 import re
+import os
+import shutil
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Union
 
@@ -404,6 +406,115 @@ async def get_job_sources(job_id: str):
             pass
             
     raise HTTPException(status_code=404, detail="Sources not yet extracted")
+
+
+@app.get("/api/system/disk")
+async def get_disk_status():
+    """Return disk space usage and size of temp/output folders."""
+    import shutil
+    total, used, free = shutil.disk_usage(config.BASE_DIR)
+
+    def _dir_size(p: Path) -> int:
+        if not p.exists():
+            return 0
+        tot = 0
+        for root, _, files in os.walk(p):
+            for f in files:
+                try:
+                    tot += os.path.getsize(os.path.join(root, f))
+                except Exception:
+                    pass
+        return tot
+
+    temp_bytes = _dir_size(config.TEMP_DIR)
+    output_bytes = _dir_size(config.OUTPUT_DIR)
+
+    return {
+        "total_gb": round(total / (1024**3), 2),
+        "used_gb": round(used / (1024**3), 2),
+        "free_gb": round(free / (1024**3), 2),
+        "free_percent": round((free / total) * 100, 1),
+        "temp_mb": round(temp_bytes / (1024**2), 1),
+        "output_mb": round(output_bytes / (1024**2), 1),
+    }
+
+
+@app.post("/api/system/clean_disk")
+async def clean_disk_space(keep_completed_videos: int = 15):
+    """
+    Free disk space:
+    1. Delete all temporary files in temp/ (except currently active jobs).
+    2. Remove orphaned intermediate transition clips and render artifacts.
+    3. Prune old completed videos in output/ keeping only the newest `keep_completed_videos`.
+    """
+    import shutil
+    before_free = shutil.disk_usage(config.BASE_DIR).free
+
+    active_job_ids = {
+        jid for jid, j in jobs.items()
+        if j.get("status") in ("running", "queued", "awaiting_slide_review", "awaiting_tts_choice")
+    }
+
+    freed_details = []
+
+    # 1. Clean temp/
+    if config.TEMP_DIR.exists():
+        for item in config.TEMP_DIR.iterdir():
+            if item.is_dir():
+                if item.name not in active_job_ids and item.name != "previews":
+                    try:
+                        shutil.rmtree(item, ignore_errors=True)
+                    except Exception as e:
+                        logger.warning(f"Failed to remove temp dir {item}: {e}")
+            elif item.is_file():
+                try:
+                    item.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        freed_details.append("Очищены временные файлы temp/")
+
+    # 2. Clean intermediate ffmpeg files in output/
+    if config.OUTPUT_DIR.exists():
+        for root, dirs, _ in os.walk(config.OUTPUT_DIR):
+            for d in list(dirs):
+                if d in ("kb_clips", "kb_trans", "kb_chunks", "transitions", "temp"):
+                    full_d = os.path.join(root, d)
+                    try:
+                        shutil.rmtree(full_d, ignore_errors=True)
+                    except Exception:
+                        pass
+        freed_details.append("Удалены промежуточные рендеры FFmpeg")
+
+    # 3. Prune older completed videos in output/ if count exceeds keep_completed_videos
+    completed_jobs = [
+        (jid, j) for jid, j in jobs.items()
+        if j.get("status") == "completed" and (config.OUTPUT_DIR / jid).exists()
+    ]
+    completed_jobs.sort(key=lambda x: x[1].get("created_at", ""), reverse=True)
+
+    if len(completed_jobs) > keep_completed_videos:
+        for jid, _ in completed_jobs[keep_completed_videos:]:
+            job_out = config.OUTPUT_DIR / jid
+            vid_file = job_out / "final_video.mp4"
+            if vid_file.exists():
+                try:
+                    vid_file.unlink(missing_ok=True)
+                    freed_details.append(f"Удалено старое видео: {jid}")
+                except Exception:
+                    pass
+
+    after_free = shutil.disk_usage(config.BASE_DIR).free
+    freed_mb = round(max(0, after_free - before_free) / (1024**2), 1)
+    new_free_gb = round(after_free / (1024**3), 2)
+
+    logger.info(f"🧹 Диск очищен: освобождено {freed_mb} МБ, свободно {new_free_gb} ГБ")
+
+    return {
+        "status": "ok",
+        "freed_mb": freed_mb,
+        "free_gb": new_free_gb,
+        "details": freed_details,
+    }
 
 
 def _build_job_thumbnail_prompt(job_id: str, job: dict, script_data: dict = None, articles: list[dict] = None) -> str:
@@ -2426,12 +2537,24 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
         
         _update_job(job, "running", 98, "Oblozhka gotova", "thumbnail_done")
         
+        # Copy subtitles into job_dir so they persist even when temp_dir is cleaned
+        final_subs_srt = job_dir / "subtitles.srt"
+        final_subs_ass = job_dir / "subtitles.ass"
+        try:
+            import shutil
+            if tts_result.get("subtitles_srt") and Path(tts_result["subtitles_srt"]).exists():
+                shutil.copy2(tts_result["subtitles_srt"], final_subs_srt)
+            if tts_result.get("subtitles_ass") and Path(tts_result["subtitles_ass"]).exists():
+                shutil.copy2(tts_result["subtitles_ass"], final_subs_ass)
+        except Exception as se:
+            logger.warning(f"Could not copy subtitles to job_dir: {se}")
+
         # ====== DONE ======
         job["result"] = {
             "video_path": str(video_path),
             "thumbnail_path": str(thumbnail_path),
             "script_path": str(script_path),
-            "subtitles_path": tts_result.get("subtitles_srt", ""),
+            "subtitles_path": str(final_subs_srt) if final_subs_srt.exists() else tts_result.get("subtitles_srt", ""),
             "title": script_data["title"],
             "title_ru": job.get("title_ru", ""),
             "thumbnail_hook": thumb_text,
@@ -2447,6 +2570,14 @@ async def _run_pipeline_impl(job_id: str, req: VideoRequest):
         }
         job["thumbnail_prompt"] = job["result"]["thumbnail_prompt"]
         
+        # Cleanup temporary files (raw images, audio chunks, kb clips) for completed job
+        try:
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            logger.info(f"[{job_id}] 🧹 Очищены временные файлы: {temp_dir}")
+        except Exception as ce:
+            logger.warning(f"[{job_id}] Ошибка очистки временных файлов: {ce}")
+
         _update_job(job, "completed", 100, "Готово!", "completed",
                     detail=f"Видео: {video_path.name}")
         logger.info(f"Job {job_id} completed: {video_path}")

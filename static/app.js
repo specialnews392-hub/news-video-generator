@@ -678,8 +678,75 @@ function showResults(job) {
 // === Show Error ===
 function showError(message) {
     document.getElementById('errorMessage').textContent = message;
+
+    // Check if error is out of disk space
+    const isDiskError = (message && (
+        message.includes('No space left') ||
+        message.includes('Errno 28') ||
+        message.includes('disk full') ||
+        message.includes('ENOSPC')
+    ));
+    const warnEl = document.getElementById('diskSpaceWarning');
+    const cleanBtn = document.getElementById('btnCleanDiskFromError');
+    if (warnEl) warnEl.style.display = isDiskError ? 'block' : 'none';
+    if (cleanBtn) cleanBtn.style.display = isDiskError ? 'inline-flex' : 'none';
+
     showPanel('error');
     setStatus('error', 'Ошибка');
+}
+
+// === Disk Space Management ===
+async function checkDiskStatus() {
+    try {
+        const resp = await fetch('/api/system/disk');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const headerEl = document.getElementById('diskHeaderStatus');
+        if (headerEl) {
+            headerEl.textContent = `Диск: ${data.free_gb} ГБ`;
+            if (data.free_gb < 2.0) {
+                headerEl.style.color = '#f87171';
+            } else {
+                headerEl.style.color = '';
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to fetch disk status:', e);
+    }
+}
+
+async function cleanDiskSpaceUI(fromError = false) {
+    if (!fromError && !confirm('Очистить временные файлы генераций (temp/*) и освободить место на диске?')) {
+        return;
+    }
+    const cleanBtn = document.getElementById('btnCleanDiskFromError');
+    if (cleanBtn) {
+        cleanBtn.disabled = true;
+        cleanBtn.textContent = '⏳ Очистка диска...';
+    }
+    try {
+        const resp = await fetch('/api/system/clean_disk', { method: 'POST' });
+        const data = await resp.json();
+        alert(`✅ Успешно! Освобождено ${data.freed_mb} МБ.\nСвободно на диске: ${data.free_gb} ГБ.`);
+        checkDiskStatus();
+        if (fromError) {
+            const warnEl = document.getElementById('diskSpaceWarning');
+            if (warnEl) {
+                warnEl.innerHTML = `✅ <b>Диск успешно очищен!</b> Доступно <b>${data.free_gb} ГБ</b>.<br/>Теперь нажмите зелёную кнопку <b>"Продолжить с сохранённого места"</b> ниже.`;
+                warnEl.style.background = 'rgba(16, 185, 129, 0.15)';
+                warnEl.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+                warnEl.style.color = '#6ee7b7';
+            }
+            if (cleanBtn) cleanBtn.style.display = 'none';
+        }
+    } catch (e) {
+        alert('Ошибка очистки диска: ' + e);
+    } finally {
+        if (cleanBtn) {
+            cleanBtn.disabled = false;
+            cleanBtn.innerHTML = '<span>🧹</span> Очистить диск в 1 клик (освободить место)';
+        }
+    }
 }
 
 // === Job Retry & Resume from Cache ===
@@ -3542,6 +3609,7 @@ async function approveAndStartGeneration() {
 // === Init ===
 document.addEventListener('DOMContentLoaded', async () => {
     await loadHistory();
+    await checkDiskStatus();
     await checkTelegramStatusOnLoad();
     await checkBackgroundQueue();
 

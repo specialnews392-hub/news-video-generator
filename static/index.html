@@ -33,6 +33,10 @@
                 </div>
             </div>
             <div class="header-right">
+                <button type="button" class="btn-header-action" id="btnDiskHeader" onclick="cleanDiskSpaceUI()" title="Очистить временные файлы и освободить место на диске" style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600;">
+                    <span>🧹</span>
+                    <span id="diskHeaderStatus">Диск</span>
+                </button>
                 <button type="button" class="btn-header-action btn-telegram-toggle" id="btnTelegramHeader" onclick="openTelegramModal()" title="Настройка уведомлений в Telegram">
                     <span class="tg-icon">✈️</span>
                     <span>Telegram</span>
@@ -641,7 +645,16 @@
                     <h2>❌ Ошибка</h2>
                 </div>
                 <div class="error-message" id="errorMessage"></div>
+                <div id="diskSpaceWarning" style="display: none; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 8px; padding: 14px 18px; margin-top: 15px; color: #fde68a; font-size: 14px; line-height: 1.5;">
+                    <div style="font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
+                        <span>💾</span> <span>Закончилось место на диске ([Errno 28] No space left on device)</span>
+                    </div>
+                    <div>В Codespaces переполнился диск из-за временных файлов генераций. Нажмите кнопку очистки ниже, чтобы мгновенно освободить гигабайты и продолжить!</div>
+                </div>
                 <div style="display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap;">
+                    <button type="button" class="btn btn-primary" id="btnCleanDiskFromError" onclick="cleanDiskSpaceUI(true)" style="display: none; background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff; font-weight: 700; padding: 12px 24px; border-radius: 8px; border: none; cursor: pointer; align-items: center; gap: 8px; box-shadow: 0 4px 15px rgba(245, 158, 11, 0.35);">
+                        <span>🧹</span> Очистить диск в 1 клик (освободить место)
+                    </button>
                     <button type="button" class="btn btn-primary" id="btnResumeFailedJob" onclick="retryCurrentJob()" style="background: linear-gradient(135deg, #10b981, #059669); color: #fff; font-weight: 600; padding: 12px 24px; border-radius: 8px; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 8px;">
                         <span>🔄</span> Продолжить с сохранённого места
                     </button>
